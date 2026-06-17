@@ -52,7 +52,7 @@ public sealed partial class KgStore : IDisposable
     // ═══════════════════════════════════════════
 
     private const int MaxCmdCacheSize = 128;
-    private readonly ConcurrentDictionary<string, SqliteCommand> _writeCmdCache = new();
+    private readonly ConcurrentDictionary<string, Lazy<SqliteCommand>> _writeCmdCache = new();
     private readonly ConcurrentDictionary<string, SqliteCommand> _readCmdCache = new();
 
     // ═══════════════════════════════════════════
@@ -119,20 +119,29 @@ public sealed partial class KgStore : IDisposable
 
     private SqliteCommand GetPreparedWrite(string sql)
     {
-        // A2: Use Lazy pattern to avoid GetOrAdd factory running multiple times under contention.
-        // The factory creates a SqliteCommand; if it runs N times, N-1 commands leak.
-        // Instead we accept the bounded leak of MaxCmdCacheSize × 2 and use the concurrent dictionary.
-        if (_writeCmdCache.TryGetValue(sql, out var existing)) return existing;
-        if (_writeCmdCache.Count >= MaxCmdCacheSize)
+        var lazy = _writeCmdCache.GetOrAdd(sql, _ => new Lazy<SqliteCommand>(() =>
         {
-            foreach (var c in _writeCmdCache.Values) c.Dispose();
-            _writeCmdCache.Clear();
+            var cmd = _writer.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.Prepare();
+            return cmd;
+        }, LazyThreadSafetyMode.ExecutionAndPublication));
+
+        // Best-effort eviction: remove one entry when near capacity (no lock, benign overshoot)
+        if (_writeCmdCache.Count > MaxCmdCacheSize)
+        {
+            foreach (var kv in _writeCmdCache)
+            {
+                if (!string.Equals(kv.Key, sql, StringComparison.Ordinal) &&
+                    _writeCmdCache.TryRemove(kv.Key, out var removed))
+                {
+                    removed.Value.Dispose();
+                    break;
+                }
+            }
         }
-        var cmd = _writer.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.Prepare();
-        _writeCmdCache.TryAdd(sql, cmd);
-        return _writeCmdCache.TryGetValue(sql, out var final) ? final : cmd;
+
+        return lazy.Value;
     }
 
     private SqliteCommand CreateReadCommand(string sql)
@@ -1485,7 +1494,7 @@ public sealed partial class KgStore : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        foreach (var cmd in _writeCmdCache.Values) cmd.Dispose();
+        foreach (var lazy in _writeCmdCache.Values) { if (lazy.IsValueCreated) lazy.Value.Dispose(); }
         _writeCmdCache.Clear();
         foreach (var cmd in _readCmdCache.Values) cmd.Dispose();
         _readCmdCache.Clear();

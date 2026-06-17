@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <RunConfiguration>
+    <!-- Default timeout per test: 30 seconds -->
+    <TestSessionTimeout>30000</TestSessionTimeout>
+  </RunConfiguration>
+  <xUnit>
+    <!-- Parallelize test classes, not just test cases -->
+    <ParallelizeTestCollections>true</ParallelizeTestCollections>
+    <MaxParallelThreads>-1</MaxParallelThreads>
+  </xUnit>
+  <MSBuild>
+    <!-- Define a property so tests can check if integration tests are enabled -->
+    <IntegrationTestsEnabled>false</IntegrationTestsEnabled>
+  </MSBuild>
+</RunSettings>

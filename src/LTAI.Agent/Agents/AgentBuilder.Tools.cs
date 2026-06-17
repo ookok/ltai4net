@@ -31,7 +31,13 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(fs.GetFileInfo));
         }
         if (canExec) tools.Add(AIFunctionFactory.Create(new SafeShellTool(ws).RunCommand));
-        if (canRead && canWrite) { tools.Add(AIFunctionFactory.Create(text.EditFile)); tools.Add(AIFunctionFactory.Create(text.MultiEdit)); }
+        if (canRead && canWrite)
+        {
+            tools.Add(AIFunctionFactory.Create(text.EditFile));
+            tools.Add(AIFunctionFactory.Create(text.MultiEdit));
+            var patchEdit = new PatchEditTool(ws);
+            tools.Add(AIFunctionFactory.Create(patchEdit.ApplyPatches));
+        }
         if (canRead) tools.Add(AIFunctionFactory.Create(TextTools.RegexTest));
         if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Review" or "LTAI-Writer")
             tools.Add(AIFunctionFactory.Create(TextTools.DiffFiles));
@@ -177,14 +183,9 @@ partial class AgentBuilder
         tools.Add(AIFunctionFactory.Create(review.BatchCloseAuditFindings));
         tools.Add(AIFunctionFactory.Create(review.DeleteAuditFinding));
         tools.Add(AIFunctionFactory.Create(review.FreezeAuditGates));
-    }
-
-    static void RegisterParallelReviewTool(ToolSet tools, string name, string ws,
-        PalaceStore? palaceStore, IServiceProvider sp, IChatClient llm, IReadOnlyList<AITool> allTools)
-    {
-        if (name is not ("LTAI-Chat" or "LTAI-Review" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Security" or "LTAI-Debug")) return;
-        var review = new ReviewTools(ws, palaceStore, sp, llm, allTools);
-        tools.Add(AIFunctionFactory.Create(review.ParallelReview));
+        // ParallelReview — needs allTools for subagent filtering; only added when allTools is available
+        if (allTools != null)
+            tools.Add(AIFunctionFactory.Create(review.ParallelReview));
     }
 
     static void RegisterSkillBankTools(ToolSet tools, string name, string[]? yamlTools)

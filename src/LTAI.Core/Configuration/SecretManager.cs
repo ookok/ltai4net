@@ -22,7 +22,7 @@ public static class SecretManager
     public static ILogger? Logger { get; set; }
 
     private static readonly ConcurrentDictionary<string, (string? value, DateTime cached)> _cache = new();
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);
 
     /// <summary>Read secret: cache (with TTL check) → Process env → User env → Machine env.</summary>
     public static string? Get(string envVar)
@@ -61,40 +61,86 @@ public static class SecretManager
 
     private static readonly bool _isWindows = OperatingSystem.IsWindows();
 
-    /// <summary>DPAPI-encrypt a secret for User-scope env var storage. On non-Windows, returns raw value.</summary>
+    /// <summary>DPAPI-encrypt a secret for User-scope env var storage. On non-Windows, writes to protected file.</summary>
     private static string? EncryptIfNeeded(string? value)
     {
-        if (string.IsNullOrEmpty(value) || !_isWindows) return value;
+        if (string.IsNullOrEmpty(value)) return value;
+        if (_isWindows)
+        {
+            try
+            {
+                var plain = System.Text.Encoding.UTF8.GetBytes(value);
+                var encrypted = System.Security.Cryptography.ProtectedData.Protect(plain, null,
+                    System.Security.Cryptography.DataProtectionScope.CurrentUser);
+                return "DPAPI:" + Convert.ToBase64String(encrypted);
+            }
+            catch (Exception ex)
+            {
+                Logger?.LogWarning(ex, "SecretManager: DPAPI 加密失败，回退明文存储");
+                return value;
+            }
+        }
+        // Non-Windows: store in a file with 0600 permissions
         try
         {
-            var plain = System.Text.Encoding.UTF8.GetBytes(value);
-            var encrypted = System.Security.Cryptography.ProtectedData.Protect(plain, null,
-                System.Security.Cryptography.DataProtectionScope.CurrentUser);
-            return "DPAPI:" + Convert.ToBase64String(encrypted);
+            var secretsDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".livingtree", "secrets");
+            Directory.CreateDirectory(secretsDir);
+            var filePath = Path.Combine(secretsDir, $"env.{value.GetHashCode():x8}.txt");
+            File.WriteAllText(filePath, value);
+            // Set 0600 on Linux/macOS via chmod
+            if (!_isWindows)
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("chmod", $"0600 \"{filePath.Replace("\"", "\\\"")}\"")
+                {
+                    UseShellExecute = false, CreateNoWindow = true
+                };
+                using var proc = System.Diagnostics.Process.Start(psi);
+                proc?.WaitForExit(1000);
+            }
+            return "FILE:" + filePath;
         }
         catch (Exception ex)
         {
-            Logger?.LogWarning(ex, "SecretManager: DPAPI 加密失败，回退明文存储");
+            Logger?.LogWarning(ex, "SecretManager: 文件加密失败，回退明文存储");
             return value;
         }
     }
 
-    /// <summary>DPAPI-decrypt a User-scope env var. Strips "DPAPI:" prefix before decrypting.</summary>
+    /// <summary>Decrypt a User-scope env var. Handles "DPAPI:" and "FILE:" prefixes.</summary>
     private static string? DecryptIfNeeded(string? value)
     {
-        if (string.IsNullOrEmpty(value) || !value.StartsWith("DPAPI:") || !_isWindows) return value;
-        try
+        if (string.IsNullOrEmpty(value)) return value;
+        if (value.StartsWith("DPAPI:", StringComparison.Ordinal) && _isWindows)
         {
-            var encrypted = Convert.FromBase64String(value[6..]);
-            var plain = System.Security.Cryptography.ProtectedData.Unprotect(encrypted, null,
-                System.Security.Cryptography.DataProtectionScope.CurrentUser);
-            return System.Text.Encoding.UTF8.GetString(plain);
+            try
+            {
+                var encrypted = Convert.FromBase64String(value[6..]);
+                var plain = System.Security.Cryptography.ProtectedData.Unprotect(encrypted, null,
+                    System.Security.Cryptography.DataProtectionScope.CurrentUser);
+                return System.Text.Encoding.UTF8.GetString(plain);
+            }
+            catch (Exception ex)
+            {
+                Logger?.LogWarning(ex, "SecretManager: DPAPI 解密失败，返回原始值");
+                return value;
+            }
         }
-        catch (Exception ex)
+        if (value.StartsWith("FILE:", StringComparison.Ordinal))
         {
-            Logger?.LogWarning(ex, "SecretManager: DPAPI 解密失败，返回原始值");
-            return value;
+            try
+            {
+                var filePath = value[5..];
+                return File.Exists(filePath) ? File.ReadAllText(filePath) : null;
+            }
+            catch (Exception ex)
+            {
+                Logger?.LogWarning(ex, "SecretManager: 文件读取失败");
+                return value;
+            }
         }
+        return value; // plaintext fallback
     }
 }
 

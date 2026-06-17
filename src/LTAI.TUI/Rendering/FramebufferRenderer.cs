@@ -47,7 +47,7 @@ internal sealed class FramebufferRenderer : IDisposable
 
     public void Initialize()
     {
-        Console.CursorVisible = false;
+        try { Console.CursorVisible = false; } catch { /* non-critical in headless/test env */ }
         Console.Out.Write("\u001b[2J\u001b[H");
         Console.Out.Flush();
     }
@@ -189,7 +189,7 @@ internal sealed class FramebufferRenderer : IDisposable
     {
         Console.Out.Write("\u001b[0m\u001b[2J\u001b[H");
         Console.Out.Flush();
-        Console.CursorVisible = true;
+        try { Console.CursorVisible = true; } catch { /* non-critical in headless/test env */ }
     }
 
     public void Dispose() => Shutdown();

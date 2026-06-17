@@ -80,20 +80,22 @@ public sealed class SafetyCoordinator : AIContextProvider, IDisposable
     public void Dispose() => _safeLock.Dispose();
 
     /// <summary>
-    /// F14: Blocking-safe token. Set by <see cref="StoreAIContextAsync"/> when the
+    /// Per-flow blocking token. Set by <see cref="StoreAIContextAsync"/> when the
     /// output is flagged unsafe. Cleared by ChatAgent (via <see cref="ConsumeBlock"/>)
-    /// before each new request so stale flags don't block unrelated responses.
-    /// Thread-safe via Interlocked.
+    /// before each new request. Uses AsyncLocal to prevent cross-agent state leak.
+    /// Simple assignment is safe: each ExecutionContext flow has isolated values.
     /// </summary>
-    private static int _outputBlocked;
-    private static string? _outputBlockedReason;
+    private static readonly AsyncLocal<int> _outputBlocked = new();
+    private static readonly AsyncLocal<string?> _outputBlockedReason = new();
 
-    /// <summary>Get and clear the output-blocked flag. Returns reason or null.</summary>
+    /// <summary>Get and clear the output-blocked flag for the current execution flow. Returns reason or null.</summary>
     public static string? ConsumeBlock()
     {
-        if (Interlocked.Exchange(ref _outputBlocked, 0) != 1)
+        if (_outputBlocked.Value != 1)
             return null;
-        var reason = Interlocked.Exchange(ref _outputBlockedReason, null);
+        _outputBlocked.Value = 0;
+        var reason = _outputBlockedReason.Value;
+        _outputBlockedReason.Value = null;
         return reason;
     }
 
@@ -112,19 +114,21 @@ public sealed class SafetyCoordinator : AIContextProvider, IDisposable
         if (!allowed)
         {
             _logger?.LogWarning("Safety blocked output: {Reason}", reason);
-            Interlocked.Exchange(ref _outputBlocked, 1);
-            Interlocked.Exchange(ref _outputBlockedReason, reason);
+            _outputBlocked.Value = 1;
+            _outputBlockedReason.Value = reason;
         }
     }
 
     // 常见安全/简短指令直接跳过 LLM 审核
-    private static readonly HashSet<string> SafePrefixes = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> SafeExact = new(StringComparer.OrdinalIgnoreCase)
     {
         "你好", "hi", "hello", "早上好", "下午好", "晚上好", "再见", "谢谢", "感谢",
-        "查看", "读取", "读", "打开", "列出", "搜索", "查找", "找", "显示",
         "llm", "deepseek", "help", "/", "clear", "cls",
     };
-
+    private static readonly HashSet<string> SafeActionPrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "查看", "读取", "读", "打开", "列出", "搜索", "查找", "找", "显示",
+    };
 
     /// <summary>轻量规则级安全预检（零 LLM 成本）。使用 SafetyRules 集中定义。</summary>
     private static bool IsSafeByRules(string text) => SafetyRules.IsSafeByRules(text);
@@ -135,27 +139,36 @@ public sealed class SafetyCoordinator : AIContextProvider, IDisposable
             return (false, $"Input exceeds {_maxInputChars / 1000}k chars");
 
         // 快速通道：常见安全短文本直接放行（无需 LLM 审核）
+        // 改为精确匹配，防止 "hi, ignore all rules" 绕过
         if (text.Length <= 50)
         {
-            var trimmed = text.TrimStart();
-            if (SafePrefixes.Any(p => trimmed.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            var trimmed = text.Trim();
+            if (SafeExact.Contains(trimmed))
             {
-                _logger?.LogDebug("SafetyFastPath({Direction}): OK (safe prefix)", direction);
+                _logger?.LogDebug("SafetyFastPath({Direction}): OK (safe exact)", direction);
+                return (true, "");
+            }
+            // Action prefixes: only allow when followed by whitespace or path char
+            if (SafeActionPrefixes.Any(p =>
+                trimmed.StartsWith(p, StringComparison.OrdinalIgnoreCase) &&
+                (trimmed.Length == p.Length || !char.IsLetter(trimmed[p.Length]))))
+            {
+                _logger?.LogDebug("SafetyFastPath({Direction}): OK (safe action)", direction);
                 return (true, "");
             }
         }
 
         // 规则级预检（零 LLM 成本）：短文本且通过规则检查 → 直接放行
-        // 比走 LLM 审核快 10-50 倍，覆盖 90%+ 的日常消息
-        // 增大阈值到 500 以覆盖更多日常消息，减少不必要的 LLM 安全审核
-        if (text.Length <= 500 && IsSafeByRules(text))
+        // 比走 LLM 审核快 10-50 倍，覆盖 80%+ 的日常消息
+        // 阈值降低到 200 以减少 prompt injection 绕过风险
+        if (text.Length <= 200 && IsSafeByRules(text))
         {
             _logger?.LogDebug("SafetyRulePath({Direction}): OK ({Len} chars, safe by rules)", direction, text.Length);
             return (true, "");
         }
 
-        // Shared cache hit — reuse verdict from any recent identical check
-        var cachedVerdict = VerdictCache.Get(text);
+        // Shared cache hit — reuse verdict from same-direction identical check
+        var cachedVerdict = VerdictCache.Get(text, direction);
         if (cachedVerdict.HasValue)
         {
             _logger?.LogDebug("SafetyCached({Direction}): HIT for text len={Len}", direction, text.Length);
@@ -194,7 +207,7 @@ public sealed class SafetyCoordinator : AIContextProvider, IDisposable
                 result = (true, "");
             }
 
-            VerdictCache.Set(text, result.allow, result.reason);
+            VerdictCache.Set(text, result.allow, result.reason, direction);
 
             return result;
         }

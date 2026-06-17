@@ -1,5 +1,7 @@
 // Copyright (c) LTAI. All rights reserved.
 
+using LTAI.Agent.Execution;
+using LTAI.Agent.Scheduling;
 using LTAI.Agent.Suggestions;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -76,17 +78,27 @@ public sealed class LTAIDevUIService : IDisposable
     /// <summary>Optional suggestion service for the DevUI suggestions panel.</summary>
     public ProactiveSuggestService? SuggestService { get; }
 
+    /// <summary>Span collector for execution visualization.</summary>
+    public DevUISpanCollector? SpanCollector { get; }
+
+    /// <summary>Capacity planner for token budget estimation.</summary>
+    public CapacityPlanner? Planner { get; }
+
     /// <summary>Fired when suggestions are updated (for UI refresh).</summary>
     public event Action? OnSuggestionsUpdated;
 
     public LTAIDevUIService(
         IServiceProvider sp,
         ILogger<LTAIDevUIService> logger,
-        ProactiveSuggestService? suggestService = null)
+        ProactiveSuggestService? suggestService = null,
+        DevUISpanCollector? spanCollector = null,
+        CapacityPlanner? planner = null)
     {
         _sp = sp;
         _logger = logger;
         SuggestService = suggestService;
+        SpanCollector = spanCollector;
+        Planner = planner;
 
         if (SuggestService != null)
         {
@@ -235,6 +247,39 @@ public sealed class LTAIDevUIService : IDisposable
 
     /// <summary>Mark user active to suppress background scans.</summary>
     public void MarkUserActive() => SuggestService?.MarkActive();
+
+    // ═══════════════════════════════════════════
+    //  Kanban Board (DevUI)
+    // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// Get the kanban board state for agent execution visualization.
+    /// Returns columns: running, blocked, idle, done.
+    /// </summary>
+    public IReadOnlyList<AgentKanbanItem> GetKanbanBoard()
+        => SpanCollector?.Kanban.GetBoard() ?? [];
+
+    /// <summary>
+    /// Get kanban summary counts.
+    /// </summary>
+    public (int running, int blocked, int idle, int done) GetKanbanCounts()
+        => SpanCollector?.Kanban.Counts ?? (0, 0, 0, 0);
+
+    // ═══════════════════════════════════════════
+    //  Capacity Planning (DevUI)
+    // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// Get current capacity snapshot: remaining tools, turns, usage percentage.
+    /// </summary>
+    public (int toolsRemaining, int turnsRemaining, double usagePct) GetCapacitySnapshot(int avgToolTokens = 200, int avgTurnTokens = 500)
+        => Planner?.Snapshot(avgToolTokens, avgTurnTokens) ?? (0, 0, 0);
+
+    /// <summary>
+    /// Get capacity summary string.
+    /// </summary>
+    public string GetCapacitySummary(int avgToolTokens = 200, int avgTurnTokens = 500)
+        => Planner?.Summary(avgToolTokens, avgTurnTokens) ?? "N/A";
 
     // ═══════════════════════════════════════════
     //  Private helpers

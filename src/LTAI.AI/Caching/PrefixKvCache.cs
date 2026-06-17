@@ -7,11 +7,11 @@
 //  the KV cache is reused (skipping the prefill phase).
 //
 //  In-memory ConcurrentDictionary with TTL. Thread-safe.
+//  Eviction uses a priority queue to avoid O(n) sort on every write.
 // ═══════════════════════════════════════════════════════════════
 
 using System.Collections.Concurrent;
 using LTAI.Core.Configuration;
-using System.Text;
 
 namespace LTAI.AI.Caching;
 
@@ -28,6 +28,8 @@ public sealed class PrefixKvCache : IKvCacheStore
 {
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
     private readonly TimeSpan _defaultTtl;
+    private readonly int _maxCapacity;
+    private readonly PriorityQueue<string, (DateTime ExpiresAt, int HitCount)> _evictQueue = new();
     private volatile bool _disposed;
 
     /// <summary>Number of cache entries.</summary>
@@ -36,6 +38,9 @@ public sealed class PrefixKvCache : IKvCacheStore
     /// <summary>Default TTL for cache entries.</summary>
     public TimeSpan DefaultTtl => _defaultTtl;
 
+    /// <summary>Maximum number of cache entries before eviction.</summary>
+    public int MaxCapacity => _maxCapacity;
+
     /// <summary>
     /// Time-based cleanup interval. Runs when Store is called.
     /// </summary>
@@ -43,9 +48,10 @@ public sealed class PrefixKvCache : IKvCacheStore
 
     private DateTime _lastCleanup = DateTime.UtcNow;
 
-    public PrefixKvCache(TimeSpan? defaultTtl = null)
+    public PrefixKvCache(TimeSpan? defaultTtl = null, int maxCapacity = 10000)
     {
         _defaultTtl = defaultTtl ?? TimeSpan.FromMinutes(5);
+        _maxCapacity = Math.Max(100, maxCapacity);
     }
 
     /// <inheritdoc />
@@ -73,9 +79,16 @@ public sealed class PrefixKvCache : IKvCacheStore
         if (_disposed) return;
         CleanupIfNeeded();
 
-        _cache[key] = new CacheEntry(
-            data,
-            DateTime.UtcNow + (ttl ?? _defaultTtl));
+        var expiresAt = DateTime.UtcNow + (ttl ?? _defaultTtl);
+
+        // Evict oldest entries when at capacity
+        if (_cache.Count >= _maxCapacity)
+        {
+            EvictOne();
+        }
+
+        _cache[key] = new CacheEntry(data, expiresAt);
+        _evictQueue.Enqueue(key, (expiresAt, 0));
     }
 
     /// <inheritdoc />
@@ -88,6 +101,7 @@ public sealed class PrefixKvCache : IKvCacheStore
     public void Clear()
     {
         _cache.Clear();
+        _evictQueue.Clear();
     }
 
     /// <summary>
@@ -99,7 +113,7 @@ public sealed class PrefixKvCache : IKvCacheStore
     /// <returns>Hex-encoded SHA-256 prefix key.</returns>
     public static string BuildKey(string systemPrompt, string? historySummary = null)
     {
-        var sb = new StringBuilder();
+        var sb = new System.Text.StringBuilder();
         sb.Append("sys:").Append(systemPrompt.Trim());
 
         if (!string.IsNullOrEmpty(historySummary))
@@ -141,7 +155,19 @@ public sealed class PrefixKvCache : IKvCacheStore
         foreach (var (key, entry) in _cache)
         {
             if (now >= entry.ExpiresAt)
+            {
                 _cache.TryRemove(key, out _);
+            }
+        }
+    }
+
+    private void EvictOne()
+    {
+        while (_evictQueue.Count > 0)
+        {
+            var entry = _evictQueue.Dequeue();
+            if (_cache.TryRemove(entry, out _))
+                return;
         }
     }
 
@@ -150,6 +176,7 @@ public sealed class PrefixKvCache : IKvCacheStore
         if (_disposed) return;
         _disposed = true;
         _cache.Clear();
+        _evictQueue.Clear();
     }
 
     private sealed record CacheEntry(byte[] Data, DateTime ExpiresAt)

@@ -4,6 +4,8 @@ using System.Diagnostics;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 using LTAI.AI;
+using LTAI.Agent.Pipeline;
+using LTAI.Agent.Pipeline.Steps;
 
 namespace LTAI.Benchmarks;
 
@@ -365,4 +367,56 @@ public class FastEmbBenchmarks
 file sealed class StubHttpClientFactory : System.Net.Http.IHttpClientFactory
 {
     public System.Net.Http.HttpClient CreateClient(string name) => new();
+}
+
+/// <summary>
+/// PipelineRunner benchmark — measures throughput of the post-generation
+/// pipeline (GrammarCheckStep only, since other steps are no-op with no
+/// tool calls). Run with:
+///   dotnet run -c Release --project tests/LTAI.Benchmarks -- bdn
+/// </summary>
+[MemoryDiagnoser]
+[SimpleJob(iterationCount: 10, warmupCount: 3)]
+public class PipelineRunnerBenchmarks
+{
+    private PipelineRunner _runner = null!;
+    private MessageContext _validCode = null!;
+    private MessageContext _invalidCode = null!;
+    private MessageContext _noToolCalls = null!;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        var tsParser = new LTAI.Agent.CodeAnalysis.TreeSitterParser();
+
+        _runner = new PipelineRunner(
+            grammarCheck: new GrammarCheckStep(
+                tsParser: tsParser));
+
+        _validCode = new MessageContext("test", default);
+        _validCode.ToolCalls.Add(("write", "{\"path\":\"test.cs\"}", "class Foo { }"));
+
+        _invalidCode = new MessageContext("test", default);
+        _invalidCode.ToolCalls.Add(("write", "{\"path\":\"test.cs\"}", "class Foo {"));
+
+        _noToolCalls = new MessageContext("test", default);
+    }
+
+    [Benchmark(Baseline = true)]
+    public async Task ValidCodePasses()
+    {
+        await _runner.RunPostGenerationAsync(_validCode);
+    }
+
+    [Benchmark]
+    public async Task InvalidCodeBlocked()
+    {
+        await _runner.RunPostGenerationAsync(_invalidCode);
+    }
+
+    [Benchmark]
+    public async Task NoToolCalls_EmptyPipeline()
+    {
+        await _runner.RunPostGenerationAsync(_noToolCalls);
+    }
 }

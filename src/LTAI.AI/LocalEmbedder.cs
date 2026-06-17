@@ -345,7 +345,7 @@ public sealed class LocalEmbedder : IDisposable
         }
         if (_loadInProgress && _loadTask != null)
         {
-            try { Task.Run(() => _loadTask).GetAwaiter().GetResult(); }
+            try { _loadTask.GetAwaiter().GetResult(); }
             catch
             {
                 // non-critical, best-effort
@@ -356,7 +356,7 @@ public sealed class LocalEmbedder : IDisposable
 
     /// <summary>Batched embedding — N texts in 1 session.Run. 5-10x throughput. Max 1024 texts.</summary>
     public IReadOnlyList<float[]> GenerateBatch(IReadOnlyList<string> texts)
-        => Task.Run(() => GenerateBatchAsync(texts)).GetAwaiter().GetResult();
+        => GenerateBatchAsync(texts).GetAwaiter().GetResult();
 
     public async Task<IReadOnlyList<float[]>> GenerateBatchAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
     {
@@ -597,7 +597,7 @@ public sealed class LocalEmbedder : IDisposable
             _vocabPath = vocabFile;
             _usingQuantizedModel = usingQuant;
 
-            Task.Run(() => EnsureLoadedAsync()).GetAwaiter().GetResult();
+            EnsureLoadedAsync().GetAwaiter().GetResult();
             if (_session != null) toNotify = ModelSwitched;
         }
         toNotify?.Invoke(name);

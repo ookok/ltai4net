@@ -37,7 +37,7 @@ public sealed class ProductQuantizer : IPqCodec
     private readonly int _m;        // sub-quantizer count
     private readonly int _dim;      // input dimension
     private readonly int _subDim;   // dim per sub-space
-    private float[][][] _codebooks; // [m][k][subDim]
+    private float[][][]? _codebooks; // [m][k][subDim]
     private bool _trained;
     private readonly object _lock = new();
     private bool _disposed;

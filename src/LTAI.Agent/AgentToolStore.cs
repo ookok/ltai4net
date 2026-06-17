@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
+using LTAI.Agent.Tools;
 using Microsoft.Extensions.AI;
 
 namespace LTAI.Agent;
@@ -107,18 +108,24 @@ public sealed class AgentToolStore
                     var def = JsonSerializer.Deserialize<ToolFileDefinition>(json);
                     if (def != null && !string.IsNullOrEmpty(def.Name))
                     {
+                        if (def.ScriptPath != null && ShellSecurity.IsBlocked(def.ScriptPath))
+                            continue;
+
                         Func<string> executeScript = () =>
                         {
                             try
                             {
                                 if (def.ScriptPath == null || !File.Exists(def.ScriptPath))
                                     return "⚠️ 脚本文件不存在";
+                                var escapedPath = OperatingSystem.IsWindows()
+                                    ? ShellSecurity.EscapeCmdArg(def.ScriptPath)
+                                    : ShellSecurity.EscapeBashArg(def.ScriptPath);
                                 var psi = new ProcessStartInfo
                                 {
                                     FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash",
                                     Arguments = OperatingSystem.IsWindows()
-                                        ? $"/c \"{def.ScriptPath}\""
-                                        : $"\"{def.ScriptPath}\"",
+                                        ? $"/c \"{escapedPath}\""
+                                        : $"-c \"{escapedPath}\"",
                                     RedirectStandardOutput = true,
                                     RedirectStandardError = true,
                                     UseShellExecute = false,

@@ -14,6 +14,10 @@ namespace LTAI.Agent.Tools;
 public static class OfficeDocumentReader
 {
     public const long MaxFileSize = 50 * 1024 * 1024;
+    private static readonly OpenSettings _safeOpenSettings = new()
+    {
+        MaxCharactersInPart = 50_000_000,
+    };
     private static readonly Lazy<int> _maxOutputChars = new(() =>
     {
         var env = Environment.GetEnvironmentVariable("LTAI_OFFICE_MAX_OUTPUT_CHARS");
@@ -36,7 +40,7 @@ public static class OfficeDocumentReader
     {
         try
         {
-            using var doc = WordprocessingDocument.Open(path, false);
+            using var doc = WordprocessingDocument.Open(path, false, _safeOpenSettings);
             var body = doc.MainDocumentPart?.Document.Body;
             if (body == null) return "Word 文档 (空)";
             var fi = new FileInfo(path);
@@ -59,7 +63,7 @@ public static class OfficeDocumentReader
     {
         try
         {
-            using var doc = SpreadsheetDocument.Open(path, false);
+            using var doc = SpreadsheetDocument.Open(path, false, _safeOpenSettings);
             var wb = doc.WorkbookPart!;
             var fi = new FileInfo(path);
             var sheets = wb.Workbook!.Descendants<SS.Sheet>().ToList();
@@ -81,7 +85,7 @@ public static class OfficeDocumentReader
     {
         try
         {
-            using var doc = PresentationDocument.Open(path, false);
+            using var doc = PresentationDocument.Open(path, false, _safeOpenSettings);
             var pres = doc.PresentationPart!;
             var fi = new FileInfo(path);
             var slides = pres.SlideParts.Count();
@@ -107,7 +111,7 @@ public static class OfficeDocumentReader
     public static string ExtractWordText(string path,
         CancellationToken ct = default, IProgress<string>? progress = null)
     {
-        using var doc = WordprocessingDocument.Open(path, false);
+        using var doc = WordprocessingDocument.Open(path, false, _safeOpenSettings);
         var body = doc.MainDocumentPart?.Document.Body;
         if (body == null) return "";
 
@@ -140,7 +144,7 @@ public static class OfficeDocumentReader
     public static string ExtractExcelText(string path,
         CancellationToken ct = default, IProgress<string>? progress = null)
     {
-        using var doc = SpreadsheetDocument.Open(path, false);
+        using var doc = SpreadsheetDocument.Open(path, false, _safeOpenSettings);
         var wb = doc.WorkbookPart!;
         var sb = new StringBuilder();
         var sheets = wb.Workbook!.Descendants<SS.Sheet>().ToList();
@@ -191,7 +195,7 @@ public static class OfficeDocumentReader
     public static string ExtractPptText(string path,
         CancellationToken ct = default, IProgress<string>? progress = null)
     {
-        using var doc = PresentationDocument.Open(path, false);
+        using var doc = PresentationDocument.Open(path, false, _safeOpenSettings);
         var pres = doc.PresentationPart!;
         var sb = new StringBuilder();
         var slides = pres.SlideParts.ToList();

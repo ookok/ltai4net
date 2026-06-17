@@ -53,10 +53,9 @@ public sealed class ArchiveTools
                             if (File.Exists(src))
                             {
                                 var entry = new PaxTarEntry(TarEntryType.RegularFile, Path.GetFileName(src));
-                                var fs = File.OpenRead(src);
+                                using var fs = File.OpenRead(src);
                                 entry.DataStream = fs;
                                 tarWriter.WriteEntry(entry);
-                                fs.Dispose();
                             }
                             else if (Directory.Exists(src))
                             {
@@ -64,10 +63,9 @@ public sealed class ArchiveTools
                                 {
                                     var rel = Path.GetRelativePath(src, file);
                                     var entry = new PaxTarEntry(TarEntryType.RegularFile, rel);
-                                    var dfs = File.OpenRead(file);
+                                    using var dfs = File.OpenRead(file);
                                     entry.DataStream = dfs;
                                     tarWriter.WriteEntry(entry);
-                                    dfs.Dispose();
                                 }
                             }
                         }

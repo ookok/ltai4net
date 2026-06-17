@@ -19,6 +19,10 @@ public sealed record AgentFileDef
     /// <summary>Tool category names enabled for this agent.</summary>
     public string[] Tools { get; init; } = [];
     public string Prompt { get; init; } = "";
+    /// <summary>Definition of Done criteria for this agent.</summary>
+    public string? DoD { get; init; }
+    /// <summary>WIP limit for this agent (0 = use global default).</summary>
+    public int WipLimit { get; init; }
 
     /// <summary>Cached embedding vector for semantic routing.</summary>
     public float[]? Embedding { get; init; }
@@ -28,12 +32,48 @@ public sealed record AgentFileDef
         $"{Description} | tools: {string.Join(", ", Tools)} | {Prompt.Truncate(500)}";
 }
 
-public static class AgentRegistry
+/// <summary>
+/// Registry for agent definitions loaded from <c>agents/*.agent.md</c>.
+/// Provides both static convenience access (via <c>AgentRegistry.LoadAll()</c>)
+/// and DI injectable <see cref="IAgentRegistry"/> interface.
+/// The static methods delegate to a shared default instance.
+/// </summary>
+public sealed class AgentRegistry : IAgentRegistry
 {
-    private static List<AgentFileDef>? _cached;
-    private static readonly object _cacheLock = new();
+    private static readonly Lazy<AgentRegistry> _default = new(() => new AgentRegistry());
 
-    public static List<AgentFileDef> LoadAll()
+    private List<AgentFileDef>? _cached;
+    private readonly object _cacheLock = new();
+
+    // ═══════════════════════════════════════════
+    //  Static convenience shims (backward compat)
+    //  Delegate through _default.Value to Internal* methods
+    // ═══════════════════════════════════════════
+
+    public static List<AgentFileDef> LoadAll() => _default.Value.InternalLoadAll();
+    public static void InvalidateCache() => _default.Value.InternalInvalidateCache();
+    public static void ClearEmbeddings() => _default.Value.InternalClearEmbeddings();
+    public static Task EnsureEmbeddingsAsync(EmbeddingClient embedder,
+        ToolEmbeddingCache? cache = null, CancellationToken ct = default)
+        => _default.Value.InternalEnsureEmbeddingsAsync(embedder, cache, ct);
+    public static Task<string[]> SelectTopKAsync(string task, EmbeddingClient embedder,
+        ToolEmbeddingCache? cache = null, int k = 5, CancellationToken ct = default)
+        => _default.Value.InternalSelectTopKAsync(task, embedder, cache, k, ct);
+    public static Task<IReadOnlyList<(string Name, float Score)>> SelectTopKWithScoresAsync(
+        string task, EmbeddingClient embedder, ToolEmbeddingCache? cache = null,
+        int k = 5, CancellationToken ct = default)
+        => _default.Value.InternalSelectTopKWithScoresAsync(task, embedder, cache, k, ct);
+    public static AgentFileDef? ParseFile(string path) => _default.Value.InternalParseFile(path);
+    public static AgentFileDef? Parse(string text) => _default.Value.InternalParse(text);
+    public static FileSystemWatcher? StartWatcher() => _default.Value.InternalStartWatcher();
+    public static void StopWatcher() => _default.Value.InternalStopWatcher();
+
+    // ═══════════════════════════════════════════
+    //  IAgentRegistry explicit interface implementation
+    //  (delegates to static methods via _default.Value)
+    // ═══════════════════════════════════════════
+
+    private List<AgentFileDef> InternalLoadAll()
     {
         if (_cached != null) return _cached;
         lock (_cacheLock)
@@ -54,11 +94,11 @@ public static class AgentRegistry
                 {
                     try
                     {
-                        var def = ParseFile(file);
+                        var def = InternalParseFile(file);
                         if (def != null && !string.IsNullOrEmpty(def.Name))
                             result.Add(def);
                     }
-                    catch (Exception ex) { /* skip malformed agent files — log at debug level */ }
+                    catch (Exception) { /* skip malformed agent files — log at debug level */ }
                 }
                 break;
             }
@@ -67,21 +107,14 @@ public static class AgentRegistry
         }
     }
 
-    /// <summary>Invalidate cache (e.g., when agents/*.agent.md files change).</summary>
-    public static void InvalidateCache() { lock (_cacheLock) _cached = null; }
+    private void InternalInvalidateCache() { lock (_cacheLock) _cached = null; }
 
-    /// <summary>
-    /// P14.8: reset <see cref="AgentFileDef.Embedding"/> to <c>null</c> for
-    /// every loaded agent so the next <see cref="EnsureEmbeddingsAsync"/>
-    /// call re-embeds with the active model. Does not touch the def list
-    /// itself — only the cached vectors.
-    /// </summary>
-    public static void ClearEmbeddings()
+    private void InternalClearEmbeddings()
     {
         lock (_cacheLock)
         {
             _cached = null;
-            var agents = LoadAll();
+            var agents = InternalLoadAll();
             for (int i = 0; i < agents.Count; i++)
             {
                 if (agents[i].Embedding != null)
@@ -90,22 +123,10 @@ public static class AgentRegistry
         }
     }
 
-    /// <summary>
-    /// Compute embeddings for all agents (lazy, cached per def).
-    /// Call this once at startup or when agents change.
-    /// </summary>
-    /// <remarks>
-    /// P12.1: if a <see cref="ToolEmbeddingCache"/> is supplied, the 10 agent
-    /// descriptions are sent in a single batched ONNX call and persisted to
-    /// <c>%LOCALAPPDATA%/LTAI/tool_embeddings.json</c> keyed by SHA-256 of
-    /// the capability text. On second call (or process restart) the cache
-    /// hit eliminates the embedding work entirely.
-    /// </remarks>
-    public static async Task EnsureEmbeddingsAsync(EmbeddingClient embedder,
+    private async Task InternalEnsureEmbeddingsAsync(EmbeddingClient embedder,
         ToolEmbeddingCache? cache = null, CancellationToken ct = default)
     {
-        var agents = LoadAll();
-        // P1: incremental: only process agents with null embeddings
+        var agents = InternalLoadAll();
         var pending = agents
             .Select((a, i) => (agent: a, index: i))
             .Where(x => x.agent.Embedding == null)
@@ -128,46 +149,27 @@ public static class AgentRegistry
             }
             catch
             {
-                // Cache path failed — fall through to per-agent computation
                 await ComputeEmbeddingsAsync(agents, embedder, ct).ConfigureAwait(false);
             }
             return;
         }
-        // Original sequential per-agent fallback (no cache)
         await ComputeEmbeddingsAsync(agents, embedder, ct).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Select top-K agents by semantic similarity to the task.
-    /// Uses ONNX embeddings (priority 1) or BM25 fallback.
-    /// Returns agent names suitable for routing.
-    /// Falls back to all agent names if embeddings not computed yet.
-    /// </summary>
-    public static async Task<string[]> SelectTopKAsync(string task, EmbeddingClient embedder,
+    private async Task<string[]> InternalSelectTopKAsync(string task, EmbeddingClient embedder,
         ToolEmbeddingCache? cache = null, int k = 5, CancellationToken ct = default)
     {
-        var scored = await SelectTopKWithScoresAsync(task, embedder, cache, k, ct).ConfigureAwait(false);
+        var scored = await InternalSelectTopKWithScoresAsync(task, embedder, cache, k, ct).ConfigureAwait(false);
         return scored.Select(s => s.Name).ToArray();
     }
 
-    /// <summary>
-    /// Top-K agents with cosine similarity scores. Used by the decision-tree
-    /// router (P7.7) to compute the confidence margin between rank-1 and rank-2:
-    /// a large margin → trust the top-K; a small margin → ambiguous, fall back
-    /// to all specialists.
-    /// </summary>
-    /// <remarks>
-    /// P12.1: pass a <see cref="ToolEmbeddingCache"/> to skip the initial
-    /// batched embedding of agent descriptions on subsequent calls.
-    /// </remarks>
-    public static async Task<IReadOnlyList<(string Name, float Score)>> SelectTopKWithScoresAsync(
+    private async Task<IReadOnlyList<(string Name, float Score)>> InternalSelectTopKWithScoresAsync(
         string task, EmbeddingClient embedder, ToolEmbeddingCache? cache = null,
         int k = 5, CancellationToken ct = default)
     {
-        var agents = LoadAll();
+        var agents = InternalLoadAll();
         if (agents.Count == 0) return [];
 
-        // Ensure embeddings — single pass, no duplicate All() calls
         var hasMissing = false;
         for (int i = 0; i < agents.Count; i++)
         {
@@ -175,12 +177,10 @@ public static class AgentRegistry
         }
         if (hasMissing)
         {
-            await EnsureEmbeddingsAsync(embedder, cache, ct).ConfigureAwait(false);
-            // Re-read in case EnsureEmbeddingsAsync replaced the list
-            agents = LoadAll();
+            await InternalEnsureEmbeddingsAsync(embedder, cache, ct).ConfigureAwait(false);
+            agents = InternalLoadAll();
         }
 
-        // Check if embedder is unavailable after ensuring (all null → BM25 fallback)
         var anyEmbedding = false;
         for (int i = 0; i < agents.Count; i++)
         {
@@ -197,7 +197,6 @@ public static class AgentRegistry
             return fallback;
         }
 
-        // Compute task embedding using ONNX (priority 1) → FastEmb fallback
         float[] taskEmb;
         try
         {
@@ -208,7 +207,6 @@ public static class AgentRegistry
             taskEmb = EmbeddingClient.FastEmb(task);
         }
 
-        // Pre-allocate scored list to avoid LINQ enumerator allocations
         var candidates = new List<(string name, float score)>(agents.Count);
         for (int i = 0; i < agents.Count; i++)
         {
@@ -225,13 +223,13 @@ public static class AgentRegistry
     //  Parser
     // ═══════════════════════════════════════════
 
-    public static AgentFileDef? ParseFile(string path)
+    private AgentFileDef? InternalParseFile(string path)
     {
         var text = File.ReadAllText(path);
-        return Parse(text);
+        return InternalParse(text);
     }
 
-    public static AgentFileDef? Parse(string text)
+    private AgentFileDef? InternalParse(string text)
     {
         var match = Regex.Match(text, "^---[\r]?\n(.*?)[\r]?\n---[\r]?\n(.*)", RegexOptions.Singleline);
         if (!match.Success) return null;
@@ -240,15 +238,48 @@ public static class AgentRegistry
         var body = match.Groups[2].Value.Trim();
         var def = new AgentFileDef { Prompt = body };
 
-        foreach (var line in frontmatter.Split('\n'))
+        var lines = frontmatter.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
         {
-            var trimmed = line.Trim();
+            var trimmed = lines[i].Trim();
             if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('#')) continue;
             var colonPos = trimmed.IndexOf(':');
             if (colonPos < 0) continue;
 
             var key = trimmed.Substring(0, colonPos).Trim().ToLowerInvariant();
-            var val = trimmed.Substring(colonPos + 1).Trim().Trim('"');
+            var rawVal = trimmed.Substring(colonPos + 1).Trim();
+
+            if (string.IsNullOrEmpty(rawVal) && i + 1 < lines.Length && lines[i + 1].TrimStart().StartsWith("- "))
+            {
+                var listItems = new List<string>();
+                i++;
+                while (i < lines.Length)
+                {
+                    var listLine = lines[i].Trim();
+                    if (listLine.StartsWith("- "))
+                    {
+                        listItems.Add(listLine[2..].Trim().Trim('"'));
+                        i++;
+                    }
+                    else { i--; break; }
+                }
+                rawVal = "[" + string.Join(", ", listItems.Select(item => $"\"{item.Replace("\"", "\\\"")}\"")) + "]";
+            }
+            else if (!string.IsNullOrEmpty(rawVal) && !rawVal.StartsWith('['))
+            {
+                while (i + 1 < lines.Length)
+                {
+                    var nextLine = lines[i + 1];
+                    if (!string.IsNullOrEmpty(nextLine) && nextLine[0] == ' ')
+                    {
+                        rawVal += " " + nextLine.Trim();
+                        i++;
+                    }
+                    else break;
+                }
+            }
+
+            var val = rawVal.Trim().Trim('"');
 
             switch (key)
             {
@@ -258,8 +289,10 @@ public static class AgentRegistry
                 case "topp":          if (double.TryParse(val, out var p)) def = def with { TopP = p }; break;
                 case "modelid":       def = def with { ModelId = val }; break;
                 case "inherittools":  def = def with { InheritTools = val.ToLowerInvariant() }; break;
-                case "permissions":   def = def with { Permissions = ParseJsonArray(val) ?? def.Permissions }; break;
-                case "tools":         def = def with { Tools = ParseJsonArray(val) ?? def.Tools }; break;
+                case "permissions":   def = def with { Permissions = ParseJsonArray(rawVal) ?? def.Permissions }; break;
+                case "tools":         def = def with { Tools = ParseJsonArray(rawVal) ?? def.Tools }; break;
+                case "dod":           def = def with { DoD = val }; break;
+                case "wipLimit":      if (int.TryParse(val, out var w)) def = def with { WipLimit = w }; break;
             }
         }
         return def;
@@ -269,7 +302,7 @@ public static class AgentRegistry
     //  Private
     // ═══════════════════════════════════════════
 
-    private static async Task ComputeEmbeddingsAsync(List<AgentFileDef> agents, EmbeddingClient embedder,
+    private async Task ComputeEmbeddingsAsync(List<AgentFileDef> agents, EmbeddingClient embedder,
         CancellationToken ct = default)
     {
         for (int i = 0; i < agents.Count; i++)
@@ -299,7 +332,6 @@ public static class AgentRegistry
         if (trimmed.EndsWith(']')) trimmed = trimmed[..^1];
         if (string.IsNullOrWhiteSpace(trimmed)) return null;
 
-        // Split by comma, preserving quoted values (handles `"hello, world"` as single element)
         var items = SplitCsvValues(trimmed)
             .Select(s => s.Trim().Trim('"').Trim('\''))
             .Where(s => !string.IsNullOrWhiteSpace(s))
@@ -307,7 +339,6 @@ public static class AgentRegistry
         return items.Length > 0 ? items : null;
     }
 
-    /// <summary>Splits comma-separated values while respecting double-quoted strings.</summary>
     private static string[] SplitCsvValues(string input)
     {
         var results = new List<string>();
@@ -326,12 +357,9 @@ public static class AgentRegistry
         return results.ToArray();
     }
 
-    /// <summary>
-    /// Start a FileSystemWatcher on agents directory for hot reload.
-    /// </summary>
-    private static FileSystemWatcher? _agentWatcher;
+    private FileSystemWatcher? _agentWatcher;
 
-    public static FileSystemWatcher? StartWatcher()
+    public FileSystemWatcher? InternalStartWatcher()
     {
         var dirs = new[]
         {
@@ -346,16 +374,16 @@ public static class AgentRegistry
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
                 EnableRaisingEvents = true,
             };
-            _agentWatcher.Changed += (_, e) => InvalidateCache();
-            _agentWatcher.Created += (_, e) => InvalidateCache();
-            _agentWatcher.Deleted += (_, e) => InvalidateCache();
-            AppDomain.CurrentDomain.ProcessExit += (_, _) => StopWatcher();
+            _agentWatcher.Changed += (_, e) => InternalInvalidateCache();
+            _agentWatcher.Created += (_, e) => InternalInvalidateCache();
+            _agentWatcher.Deleted += (_, e) => InternalInvalidateCache();
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => InternalStopWatcher();
             return _agentWatcher;
         }
         return null;
     }
 
-    public static void StopWatcher()
+    public void InternalStopWatcher()
     {
         try { _agentWatcher?.Dispose(); } catch
         {
@@ -363,6 +391,24 @@ public static class AgentRegistry
         }
         _agentWatcher = null;
     }
+
+    // ═══════════════════════════════════════════
+    //  IAgentRegistry explicit interface implementation
+    // ═══════════════════════════════════════════
+
+    List<AgentFileDef> IAgentRegistry.LoadAll() => InternalLoadAll();
+    void IAgentRegistry.InvalidateCache() => InternalInvalidateCache();
+    void IAgentRegistry.ClearEmbeddings() => InternalClearEmbeddings();
+    Task IAgentRegistry.EnsureEmbeddingsAsync(EmbeddingClient embedder, ToolEmbeddingCache? cache, CancellationToken ct)
+        => InternalEnsureEmbeddingsAsync(embedder, cache, ct);
+    Task<string[]> IAgentRegistry.SelectTopKAsync(string task, EmbeddingClient embedder, ToolEmbeddingCache? cache, int k, CancellationToken ct)
+        => InternalSelectTopKAsync(task, embedder, cache, k, ct);
+    Task<IReadOnlyList<(string Name, float Score)>> IAgentRegistry.SelectTopKWithScoresAsync(string task, EmbeddingClient embedder, ToolEmbeddingCache? cache, int k, CancellationToken ct)
+        => InternalSelectTopKWithScoresAsync(task, embedder, cache, k, ct);
+    AgentFileDef? IAgentRegistry.ParseFile(string path) => InternalParseFile(path);
+    AgentFileDef? IAgentRegistry.Parse(string text) => InternalParse(text);
+    FileSystemWatcher? IAgentRegistry.StartWatcher() => InternalStartWatcher();
+    void IAgentRegistry.StopWatcher() => InternalStopWatcher();
 }
 
 file static class StringExt

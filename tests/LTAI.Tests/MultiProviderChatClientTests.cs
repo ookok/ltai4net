@@ -245,7 +245,8 @@ file sealed class FaultyChatClient : IChatClient
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         await Task.Yield();
-        throw _exception;
+        var ex = _exception;
+        if (ex != null) throw ex;
         yield break;
     }
 }

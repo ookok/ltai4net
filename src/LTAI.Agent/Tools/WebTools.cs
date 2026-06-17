@@ -2,6 +2,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using LTAI.Core.Configuration;
 using LTAI.Mm.Ir;
 using Microsoft.Extensions.Logging;
@@ -68,7 +69,8 @@ public sealed class WebTools
         [Description("Region: 'cn' for Chinese engines, 'global' for international, 'all' for both")][MM("desc=搜索区域; enums=cn|global|all")] string region = "all",
         [Description("Time filter: 'hour', 'day', 'week', 'month', 'year', or empty for no filter")][MM("desc=时间过滤; enums=hour|day|week|month|year")] string? timeFilter = null,
         [Description("Limit to a specific site (e.g. 'github.com'). Empty for all sites")][MM("desc=限定站点; nullable")] string? site = null,
-        [Description("Number of results to return per engine (1-10)")][MM("desc=结果数量; min=1; max=10")] int topK = 5)
+        [Description("Number of results to return per engine (1-10)")][MM("desc=结果数量; min=1; max=10")] int topK = 5,
+        CancellationToken ct = default)
     {
         topK = Math.Clamp(topK, 1, 10);
 
@@ -326,7 +328,8 @@ public sealed class WebTools
     [Description("Fetch a web URL (http/https only) and return its text content. 不支持 file:// 等本地协议。")]
     public async Task<string> WebFetch(
         [Description("URL to download (http/https only)")] string url,
-        [Description("Maximum characters to return")] int maxChars = 50000)
+        [Description("Maximum characters to return")] int maxChars = 50000,
+        CancellationToken ct = default)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
             return $"Error: Invalid URL '{url}'";
@@ -351,7 +354,7 @@ public sealed class WebTools
             http.DefaultRequestHeaders.UserAgent.ParseAdd(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
-            var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead)
+            var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct)
                 .ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
@@ -412,7 +415,8 @@ public sealed class WebTools
         [Description("HTTP method (GET, POST, PUT, DELETE)")] string method,
         [Description("Request URL")] string url,
         [Description("Optional JSON body for POST/PUT")] string? body = null,
-        [Description("Optional JSON headers")] string? headers = null)
+        [Description("Optional JSON headers")] string? headers = null,
+        CancellationToken ct = default)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
             return $"Error: Invalid URL '{url}'";
@@ -448,8 +452,8 @@ public sealed class WebTools
             if (body != null && (method is "POST" or "PUT" or "PATCH"))
                 req.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
-            using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-            var respBody = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            var respBody = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (respBody.Length > 50000)
                 respBody = ContentTruncator.Truncate(respBody, 50000);
             return $"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}\n\n{respBody}";

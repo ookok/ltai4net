@@ -56,17 +56,25 @@ public sealed class ApiKeyMiddleware
             return;
         }
 
-        // Try HMAC-SHA256 signature verification first
-        // Signature format: HMAC-SHA256 hex-encoded HMAC of the request path
+        // Try HMAC-SHA256 signature verification
+        // Signature includes method + path + timestamp + nonce to prevent replay attacks
+        // Requires X-Timestamp (Unix seconds) and X-Nonce headers
         var signature = context.Request.Headers["X-Signature"].FirstOrDefault();
-        if (!string.IsNullOrEmpty(signature))
+        var timestampStr = context.Request.Headers["X-Timestamp"].FirstOrDefault();
+        var nonce = context.Request.Headers["X-Nonce"].FirstOrDefault();
+        if (!string.IsNullOrEmpty(signature) && !string.IsNullOrEmpty(timestampStr) && !string.IsNullOrEmpty(nonce))
         {
-            var path = context.Request.Path.ToString();
-            var expectedHmac = ComputeHmac(_configuredKey, path);
-            if (ConstantTimeEquals(expectedHmac, signature))
+            if (long.TryParse(timestampStr, out var ts) && Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ts) <= 30)
             {
-                await _next(context).ConfigureAwait(false);
-                return;
+                var method = context.Request.Method;
+                var path = context.Request.Path.ToString();
+                var message = $"{method}|{path}|{timestampStr}|{nonce}";
+                var expectedHmac = ComputeHmac(_configuredKey, message);
+                if (ConstantTimeEquals(expectedHmac, signature))
+                {
+                    await _next(context).ConfigureAwait(false);
+                    return;
+                }
             }
         }
 

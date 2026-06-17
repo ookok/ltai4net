@@ -480,75 +480,11 @@ public sealed class SystemTools
 
     private static readonly Regex _dockerImageRx = new(@"^[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$", RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
 
-    private static readonly HashSet<string> BlockedExes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "sudo", "su", "chmod", "chown", "mkfs", "fdisk",
-        "dd", "shutdown", "reboot", "init", "halt", "poweroff",
-        "passwd", "useradd", "usermod", "groupadd", "fuser", "kill",
-        "mount", "umount", "iptables", "ufw", "systemctl",
-        "cmd", "cmd.exe", "certutil", "bitsadmin", "mshta", "cscript", "wmic",
-        "reg", "schtasks", "diskpart", "bcdedit", "regsvr32", "rundll32",
-        "attrib", "cacls", "takeown", "icacls", "vssadmin",
-    };
-
-    private static readonly string[] DangerousPatterns =
-    {
-        "rm -rf /", "rm -rf ~", "rm -rf --no-preserve-root",
-        ":(){ :|:& };:", "eval ", "exec ",
-        "> /dev/", "dd if=", "wget -O - | sh", "curl .* | sh",
-        "wget .* -O ", "certutil .* -urlcache", "bitsadmin .* /transfer",
-    };
-
-    private static readonly HashSet<string> CodeExecNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "bash", "sh", "zsh", "dash", "ksh", "fish",
-        "python", "python2", "python3", "py",
-        "perl", "perl5", "ruby", "rake",
-        "php", "lua", "luajit",
-        "tclsh", "wish",
-        "powershell", "pwsh", "powershell.exe", "pwsh.exe",
-    };
-
-    private static readonly HashSet<string> CodeExecArgs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "-c", "-command", "-e", "-i",
-    };
-
-    private static readonly string[] CommandSeps = { " & ", " && ", " || ", " | ", "; " };
-
     private static string CheckCommandSafety(string command)
     {
-        var cmdLower = command.ToLowerInvariant();
-        var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var executable = parts.Length > 0 ? parts[0].Trim() : "";
-        var executableName = Path.GetFileName(executable.Trim('"').AsSpan()).ToString();
-
-        if (BlockedExes.Contains(executableName))
-            return "❌ 命令包含危险操作，已阻止";
-
-        if (DangerousPatterns.Any(p => cmdLower.Contains(p)))
-            return "❌ 命令包含危险操作，已阻止";
-
-        if (parts.Length >= 2 && CodeExecNames.Contains(parts[0]) && CodeExecArgs.Contains(parts[1]))
-            return "❌ 命令包含代码执行操作 (-c/-e/-command)，已阻止";
-
-        foreach (var sep in CommandSeps)
-        {
-            if (cmdLower.Contains(sep))
-            {
-                var partsChk = command.Split(new[] { "&&", "||", "|", "&", ";" }, StringSplitOptions.TrimEntries);
-                foreach (var part in partsChk)
-                {
-                    var partExec = part.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                    if (partExec.Length == 0) continue;
-                    var pn = Path.GetFileName(partExec[0].AsSpan()).ToString();
-                    if (BlockedExes.Contains(pn) || CodeExecNames.Contains(pn))
-                        return $"❌ 命令包含危险操作（{pn}），已阻止";
-                }
-                break;
-            }
-        }
-        return "";
+        return ShellSecurity.IsBlocked(command)
+            ? "❌ 命令包含危险操作，已阻止"
+            : "";
     }
 
     private static string FormatSize(long bytes) => bytes switch

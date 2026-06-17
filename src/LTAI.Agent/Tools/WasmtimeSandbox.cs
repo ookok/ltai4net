@@ -179,6 +179,11 @@ public sealed class WasmtimeSandbox : AIContextProvider
             (command.Contains(":\\") || command.Contains("./") || command.Contains(".\\")))
             return "❌ 读取文件请使用 ReadFileContent 工具（【推荐】读取文件内容的首选工具），不要用命令行。";
 
+        // ── Security: block dangerous commands ──
+        var blockReason = CheckBlocked(command);
+        if (blockReason != null)
+            return ToolResult.Error(blockReason);
+
         var resolvedDir = PathUtils.SafeResolvePath(_sandboxDir, workDir);
         if (resolvedDir == null)
             return ToolResult.Error("Working directory escapes sandbox");
@@ -193,10 +198,11 @@ public sealed class WasmtimeSandbox : AIContextProvider
             cts.CancelAfter(TimeSpan.FromSeconds(_shellTimeoutSec));
 
             var isWindows = OperatingSystem.IsWindows();
+            var escapedCmd = isWindows ? ShellSecurity.EscapeCmdArg(command) : ShellSecurity.EscapeBashArg(command);
             var psi = new ProcessStartInfo
             {
                 FileName = isWindows ? "cmd.exe" : "/bin/bash",
-                Arguments = isWindows ? $"/c \"{command}\"" : $"-c \"{command}\"",
+                Arguments = isWindows ? $"/c \"{escapedCmd}\"" : $"-c \"{escapedCmd}\"",
                 WorkingDirectory = resolvedDir,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -204,10 +210,15 @@ public sealed class WasmtimeSandbox : AIContextProvider
                 CreateNoWindow = true,
             };
 
-            // Minimal PATH — no network utilities
+            // Restrict environment
             psi.EnvironmentVariables["PATH"] = isWindows
                 ? SystemPathFallback
                 : "/usr/bin:/bin:/usr/local/bin";
+            psi.EnvironmentVariables.Remove("LD_PRELOAD");
+            psi.EnvironmentVariables.Remove("LD_LIBRARY_PATH");
+            psi.EnvironmentVariables.Remove("DYLD_INSERT_LIBRARIES");
+            psi.EnvironmentVariables.Remove("COR_ENABLE_PROFILING");
+            psi.EnvironmentVariables.Remove("COR_PROFILER");
 
             using var process = new Process { StartInfo = psi };
 
@@ -379,6 +390,14 @@ public sealed class WasmtimeSandbox : AIContextProvider
             System.Buffers.ArrayPool<char>.Shared.Return(buffer);
             System.Buffers.ArrayPool<char>.Shared.Return(chunk);
         }
+    }
+
+    /// <summary>Check if command is blocked by ShellSecurity rules.</summary>
+    private static string? CheckBlocked(string command)
+    {
+        if (ShellSecurity.IsBlocked(command))
+            return "命令包含危险操作，已在沙箱中阻止";
+        return null;
     }
 
     protected override ValueTask StoreAIContextAsync(

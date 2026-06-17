@@ -150,6 +150,9 @@ public sealed class MultiProviderChatClient : IChatClient
     /// <summary>Return the L3 tier client for keyed DI resolution.</summary>
     public IChatClient GetL3Client() => _clients.TryGetValue("l3", out var c) ? c : _clients["l1"];
 
+    /// <summary>Return the L2 tier client for keyed DI resolution. Falls back to L1.</summary>
+    public IChatClient GetL2Client() => _clients.TryGetValue("l2", out var c) ? c : _clients["l1"];
+
     /// <summary>
     /// Resolve provider name from options.ModelId.
     /// Supports capability: prefix (e.g. "capability:tool-call") — uses ModelMetadataProvider
@@ -724,7 +727,11 @@ public sealed class MultiProviderChatClient : IChatClient
     }
 
     object? IChatClient.GetService(Type t, object? k) => t == typeof(ChatClientMetadata) ? Metadata : null;
-    void IDisposable.Dispose() { foreach (var c in _clients.Values) c.Dispose(); }
+    void IDisposable.Dispose()
+    {
+        foreach (var c in _clients.Values) c.Dispose();
+        _breakerStore?.Dispose();
+    }
 }
 
 /// <summary>
@@ -869,6 +876,10 @@ public static class ServiceCollectionExtensions
                 // 启用自动解压（API 返回可能为 gzip）
                 AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
             });
+
+        // Step 0: ToolRegistry — DI singleton for tool retrieval (BM25 + Vector + RRF).
+        // Backward-compatible static access preserved via ToolRegistry.X().
+        services.AddSingleton<IToolRegistry, ToolRegistry>();
 
         // Step 1: Models.dev client — fetches provider/model metadata with 24h cache.
         // Used by ProviderRegistry, ModelAutoSelector, and ModelMetadataProvider.
@@ -1037,6 +1048,13 @@ public static class ServiceCollectionExtensions
             return router.GetL3Client();
         });
 
+        // Expose L2 as a keyed IChatClient for MoA workflow proposers/aggregators.
+        services.AddKeyedSingleton<IChatClient>("l2", (sp, _) =>
+        {
+            var router = sp.GetRequiredService<MultiProviderChatClient>();
+            return router.GetL2Client();
+        });
+
         // Step 2b: Wrap with SafeChatClient for output safety interception (optional)
         services.AddSingleton<IChatClient>(sp =>
         {
@@ -1046,10 +1064,12 @@ public static class ServiceCollectionExtensions
             if (opts.AI.SkipSafetyChecks)
             {
                 var env = sp.GetService<IHostEnvironment>();
-                if (env?.IsDevelopment() == true)
-                    return router; // Bypass safety in dev mode
-                var warnLog = sp.GetService<ILogger<MultiProviderChatClient>>();
-                warnLog?.LogWarning("SkipSafetyChecks=true but not in Development environment — safety wrapper will NOT be bypassed");
+                if (env?.IsDevelopment() != true)
+                {
+                    var warnLog = sp.GetService<ILogger<MultiProviderChatClient>>();
+                    warnLog?.LogWarning("SkipSafetyChecks=true in non-Development environment — safety wrapper bypassed");
+                }
+                return router;
             }
 
             var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();

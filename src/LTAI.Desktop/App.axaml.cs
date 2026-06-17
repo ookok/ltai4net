@@ -46,6 +46,7 @@ public class App : Application
             });
             var loadingHint = new TextBlock
             {
+                Name = "loadingHint",
                 Text = "首次启动可能需要加载 ONNX 模型。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = new SolidColorBrush(Color.Parse("#aaaaaa")),
@@ -67,7 +68,34 @@ public class App : Application
             {
                 Exception? initError = null;
                 try { await Program.InitializeServicesAsync().ConfigureAwait(false); }
-                catch (Exception ex) { initError = ex; }
+                catch (Exception ex)
+                {
+                    File.AppendAllText("desktop-startup.log",
+                        $"[{DateTime.UtcNow:O}] InitializeServicesAsync failed: {ex.Message}\n");
+
+                    // 静默重试一次（更长的超时）
+                    try
+                    {
+                        await Dispatcher.UIThread.InvokeAsync(() =>
+                        {
+                            var hint = loadingWindow.FindControl<TextBlock>("loadingHint");
+                            if (hint != null)
+                                hint.Text = "首次尝试超时，正在后台静默重试...";
+                        });
+                        // 设置更长的超时重试
+                        Environment.SetEnvironmentVariable("LTAI_INIT_TIMEOUT_SEC", "120");
+                        await Program.InitializeServicesAsync().ConfigureAwait(false);
+                        initError = null;
+                        File.AppendAllText("desktop-startup.log",
+                            $"[{DateTime.UtcNow:O}] Background retry succeeded\n");
+                    }
+                    catch (Exception retryEx)
+                    {
+                        initError = retryEx;
+                        File.AppendAllText("desktop-startup.log",
+                            $"[{DateTime.UtcNow:O}] Background retry also failed: {retryEx.Message}\n");
+                    }
+                }
 
                 try
                 {

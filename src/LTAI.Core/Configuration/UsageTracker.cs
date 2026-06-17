@@ -50,16 +50,9 @@ public sealed class UsageTracker : IUsageTracker
     /// Begin a scoped cost tracking session. Records token/cost deltas on dispose.
     /// Useful for per-request or per-conversation cost attribution in multi-tenant scenarios.
     /// Nested scopes are supported — each records from its start snapshot.
-    /// Example:
-    /// <code>
-    /// using (var scope = UsageTracker.BeginScope())
-    /// {
-    ///     await llm.GetResponseAsync(...);
-    ///     Console.WriteLine($"This request cost {scope.Cost:F4}¥");
-    /// }
-    /// </code>
     /// </summary>
     public UsageScope BeginScope() => new(
+        this,
         Interlocked.Read(ref _promptTokens),
         Interlocked.Read(ref _completionTokens),
         _totalCost);
@@ -73,53 +66,55 @@ public sealed class UsageTracker : IUsageTracker
     /// </summary>
     public sealed class UsageScope : IDisposable
     {
+        private readonly UsageTracker _tracker;
         private readonly long _startPrompt;
         private readonly long _startCompletion;
         private readonly double _startCost;
-        internal UsageScope(long startPrompt, long startCompletion, double startCost)
+        internal UsageScope(UsageTracker tracker, long startPrompt, long startCompletion, double startCost)
         {
+            _tracker = tracker;
             _startPrompt = startPrompt;
             _startCompletion = startCompletion;
             _startCost = startCost;
         }
 
         /// <summary>Prompt tokens used within this scope.</summary>
-        public long PromptDelta => Interlocked.Read(ref _promptTokens) - _startPrompt;
+        public long PromptDelta => Interlocked.Read(ref _tracker._promptTokens) - _startPrompt;
         /// <summary>Completion tokens used within this scope.</summary>
-        public long CompletionDelta => Interlocked.Read(ref _completionTokens) - _startCompletion;
+        public long CompletionDelta => Interlocked.Read(ref _tracker._completionTokens) - _startCompletion;
         /// <summary>Estimated cost (¥) within this scope.</summary>
-        public decimal Cost => (decimal)(Volatile.Read(ref _totalCost) - _startCost);
+        public decimal Cost => (decimal)(Volatile.Read(ref _tracker._totalCost) - _startCost);
 
         public void Dispose() { }
     }
 
-    // ══ Shared state (static, shared by Default + any scoped instances) ══
-    private static long _promptTokens;
-    private static long _completionTokens;
-    private static double _totalCost;
-    private static readonly object _costLock = new();
-    private static long _requests;
-    private static readonly Stopwatch _timer = Stopwatch.StartNew();
-    private static string _activeModel = "";
-    private static long _cacheHits;
-    private static long _cacheMisses;
-    private static long _cacheHitTokens;
-    private static long _cacheMissTokens;
-    private static long _toolCalls;
-    private static string _currentTool = "";
-    private static long _lastToolCallMs;
-    private static long _lastLlmCallMs;
-    private static long _lastStreamTokens;
-    private static long _lastStreamElapsedMs;
-    private static int _contextWindowSize = 64000;
-    private static double _balance;
-    private static string _balanceCurrency = "";
-    private static string _balanceSource = "";
+    // ══ Instance state (each UsageTracker has its own counters) ══
+    private long _promptTokens;
+    private long _completionTokens;
+    private double _totalCost;
+    private readonly object _costLock = new();
+    private long _requests;
+    private readonly Stopwatch _timer = Stopwatch.StartNew();
+    private string _activeModel = "";
+    private long _cacheHits;
+    private long _cacheMisses;
+    private long _cacheHitTokens;
+    private long _cacheMissTokens;
+    private long _toolCalls;
+    private string _currentTool = "";
+    private long _lastToolCallMs;
+    private long _lastLlmCallMs;
+    private long _lastStreamTokens;
+    private long _lastStreamElapsedMs;
+    private int _contextWindowSize = 64000;
+    private double _balance;
+    private string _balanceCurrency = "";
+    private string _balanceSource = "";
     private static readonly HttpClient _balanceHttp = new() { Timeout = TimeSpan.FromSeconds(5) };
-    private static readonly object _balanceLock = new();
+    private readonly object _balanceLock = new();
     private static readonly ConcurrentDictionary<string, int> _modelContextCache = new(StringComparer.OrdinalIgnoreCase);
-    private static long _failedTurns;
-    private static string? _lastFailureReason;
+    private long _failedTurns;
+    private string? _lastFailureReason;
 
     // ══ IUsageTracker explicit implementation (accessible when cast to interface) ══
     void IUsageTracker.Record(int prompt, int completion, string model) => RecordInternal(prompt, completion, model);
@@ -167,10 +162,26 @@ public sealed class UsageTracker : IUsageTracker
         }
     }
 
+    private void RecordInstance(int prompt, int completion, string model)
+        => RecordInstance(prompt, completion, 0, prompt, model);
+
     private static void RecordInternal(int prompt, int completion, string model)
-        => RecordInternal(prompt, completion, 0, prompt, model);
+    {
+        Default.RecordInstance(prompt, completion, model);
+        var scoped = Scoped.Value;
+        if (scoped != null && scoped != Default)
+            scoped.RecordInstance(prompt, completion, model);
+    }
 
     private static void RecordInternal(int prompt, int completion, int cacheHit, int cacheMiss, string model)
+    {
+        Default.RecordInstance(prompt, completion, cacheHit, cacheMiss, model);
+        var scoped = Scoped.Value;
+        if (scoped != null && scoped != Default)
+            scoped.RecordInstance(prompt, completion, cacheHit, cacheMiss, model);
+    }
+
+    private void RecordInstance(int prompt, int completion, int cacheHit, int cacheMiss, string model)
     {
         Interlocked.Add(ref _promptTokens, prompt);
         Interlocked.Add(ref _completionTokens, completion);
@@ -244,37 +255,38 @@ public sealed class UsageTracker : IUsageTracker
     void IUsageTracker.SetActiveTool(string toolName) => Interlocked.Exchange(ref _currentTool, toolName);
     string IUsageTracker.CurrentTool => _currentTool;
 
-    // ══ Public static members (same names as before — backward compatible) ══
-    public static long PromptTokens => Interlocked.Read(ref _promptTokens);
-    public static long CompletionTokens => Interlocked.Read(ref _completionTokens);
+    // ══ Public static members — delegate to Default for backward compat ══
+    // Token/cost tracking dual-writes to Default + Scoped via RecordInternal.
+    // Metadata/status writes (model name, tool name, cache stats) go to Default only.
+    public static long PromptTokens => Default._promptTokens;
+    public static long CompletionTokens => Default._completionTokens;
     public static long TotalTokens => PromptTokens + CompletionTokens;
-    public static long Requests => Interlocked.Read(ref _requests);
-    public static TimeSpan Uptime => _timer.Elapsed;
-    public static decimal EstimatedCost { get { lock (_costLock) { return (decimal)_totalCost; } } }
+    public static long Requests => Default._requests;
+    public static TimeSpan Uptime => Default._timer.Elapsed;
+    public static decimal EstimatedCost { get { lock (Default._costLock) { return (decimal)Default._totalCost; } } }
     public static string CostDisplay => $"¥{EstimatedCost:F4}";
-    public static string ActiveModel => _activeModel;
-    public static void SetActiveModel(string model) => Interlocked.Exchange(ref _activeModel, model);
-    public static void RecordCacheHit() => Interlocked.Increment(ref _cacheHits);
-    public static void RecordCacheMiss() => Interlocked.Increment(ref _cacheMisses);
-    public static long CacheHits => Interlocked.Read(ref _cacheHits);
-    public static long CacheMisses => Interlocked.Read(ref _cacheMisses);
+    public static string ActiveModel => Default._activeModel;
+    public static void SetActiveModel(string model) => Interlocked.Exchange(ref Default._activeModel, model);
+    public static void RecordCacheHit() => Interlocked.Increment(ref Default._cacheHits);
+    public static void RecordCacheMiss() => Interlocked.Increment(ref Default._cacheMisses);
+    public static long CacheHits => Default._cacheHits;
+    public static long CacheMisses => Default._cacheMisses;
     public static void RecordCacheTokens(long hitTokens, long missTokens)
     {
-        Interlocked.Add(ref _cacheHitTokens, hitTokens);
-        Interlocked.Add(ref _cacheMissTokens, missTokens);
+        Interlocked.Add(ref Default._cacheHitTokens, hitTokens);
+        Interlocked.Add(ref Default._cacheMissTokens, missTokens);
     }
-    public static long CacheHitTokens => Interlocked.Read(ref _cacheHitTokens);
-    public static long CacheMissTokens => Interlocked.Read(ref _cacheMissTokens);
+    public static long CacheHitTokens => Default._cacheHitTokens;
+    public static long CacheMissTokens => Default._cacheMissTokens;
     public static double CacheHitRate
     {
         get
         {
-            var hitT = Interlocked.Read(ref _cacheHitTokens);
-            var missT = Interlocked.Read(ref _cacheMissTokens);
-            if (hitT + missT > 0)
-                return (double)hitT / (hitT + missT) * 100;
-            var hitC = Interlocked.Read(ref _cacheHits);
-            var missC = Interlocked.Read(ref _cacheMisses);
+            var hitT = Default._cacheHitTokens;
+            var missT = Default._cacheMissTokens;
+            if (hitT + missT > 0) return (double)hitT / (hitT + missT) * 100;
+            var hitC = Default._cacheHits;
+            var missC = Default._cacheMisses;
             return hitC + missC > 0 ? (double)hitC / (hitC + missC) * 100 : 0;
         }
     }
@@ -282,79 +294,70 @@ public sealed class UsageTracker : IUsageTracker
     {
         get
         {
-            var hitT = Interlocked.Read(ref _cacheHitTokens);
+            var hitT = Default._cacheHitTokens;
             if (hitT == 0) return "¥0.0000";
             var saved = hitT / 1_000_000.0 * (1.0 - 0.02);
             return $"¥{saved:F4}";
         }
     }
-    public static void RecordToolCall() => Interlocked.Increment(ref _toolCalls);
-    public static long ToolCalls => Interlocked.Read(ref _toolCalls);
+    public static void RecordToolCall() => Interlocked.Increment(ref Default._toolCalls);
+    public static long ToolCalls => Default._toolCalls;
 
-    /// <summary>Lightweight failure marker — in-memory, zero IO.</summary>
     public static void RecordTurnOutcome(bool success, string? reason = null)
     {
         if (!success)
         {
-            Interlocked.Increment(ref _failedTurns);
-            if (reason != null) Volatile.Write(ref _lastFailureReason, reason);
+            Interlocked.Increment(ref Default._failedTurns);
+            if (reason != null) Volatile.Write(ref Default._lastFailureReason, reason);
         }
     }
-    /// <summary>Cumulative count of failed turns.</summary>
-    public static long FailedTurns => Volatile.Read(ref _failedTurns);
-    /// <summary>Reason from the most recently recorded failure (best-effort, not a queue).</summary>
-    public static string? LastFailureReason => Volatile.Read(ref _lastFailureReason);
-    public static void SetActiveTool(string toolName) => Interlocked.Exchange(ref _currentTool, toolName);
-    public static string CurrentTool => _currentTool ?? "";
-    private static readonly AsyncLocal<Stopwatch?> _toolStopwatch = new();
+    public static long FailedTurns => Default._failedTurns;
+    public static string? LastFailureReason => Default._lastFailureReason;
+    public static void SetActiveTool(string toolName) => Interlocked.Exchange(ref Default._currentTool, toolName);
+    public static string CurrentTool => Default._currentTool ?? "";
 
-    public static void StartToolTimer()
-    {
-        _toolStopwatch.Value = Stopwatch.StartNew();
-    }
+    private static readonly AsyncLocal<Stopwatch?> _toolStopwatch = new();
+    public static void StartToolTimer() => _toolStopwatch.Value = Stopwatch.StartNew();
     public static void StopToolTimer()
     {
         var sw = _toolStopwatch.Value;
         if (sw != null)
         {
             sw.Stop();
-            Interlocked.Exchange(ref _lastToolCallMs, sw.ElapsedMilliseconds);
+            Interlocked.Exchange(ref Default._lastToolCallMs, sw.ElapsedMilliseconds);
             _toolStopwatch.Value = null;
         }
     }
-    public static long ToolCallMs => Interlocked.Read(ref _lastToolCallMs);
+    public static long ToolCallMs => Default._lastToolCallMs;
     public static string ToolCallTimeDisplay
     {
         get
         {
-            var ms = Interlocked.Read(ref _lastToolCallMs);
+            var ms = Default._lastToolCallMs;
             return ms >= 1000 ? $"{ms / 1000.0:F1}s" : ms > 0 ? $"{ms}ms" : "";
         }
     }
-    public static void RecordLlmCallDuration(long latencyMs)
-    {
-        Interlocked.Exchange(ref _lastLlmCallMs, latencyMs);
-    }
-    public static long LlmCallMs => Interlocked.Read(ref _lastLlmCallMs);
+    public static void RecordLlmCallDuration(long latencyMs) => Interlocked.Exchange(ref Default._lastLlmCallMs, latencyMs);
+    public static long LlmCallMs => Default._lastLlmCallMs;
     public static string LlmCallTimeDisplay
     {
         get
         {
-            var ms = Interlocked.Read(ref _lastLlmCallMs);
+            var ms = Default._lastLlmCallMs;
             return ms >= 1000 ? $"{ms / 1000.0:F1}s" : ms > 0 ? $"{ms}ms" : "";
         }
     }
     public static void RecordStreamingMetrics(long completionTokens, long elapsedMs)
     {
-        Interlocked.Exchange(ref _lastStreamTokens, completionTokens);
-        Interlocked.Exchange(ref _lastStreamElapsedMs, elapsedMs);
+        Interlocked.Exchange(ref Default._lastStreamTokens, completionTokens);
+        Interlocked.Exchange(ref Default._lastStreamElapsedMs, elapsedMs);
     }
     public static double? CurrentTps
     {
         get
         {
-            var tok = Interlocked.Read(ref _lastStreamTokens);
-            var ms = Interlocked.Read(ref _lastStreamElapsedMs);
+            var tok = Default._lastStreamTokens;
+            var ms = Default._lastStreamElapsedMs;
             if (ms < 500 || tok < 4) return null;
             return Math.Round(tok * 1000.0 / ms, 1);
         }
@@ -367,13 +370,13 @@ public sealed class UsageTracker : IUsageTracker
             return tps.HasValue ? $"{tps:F0} t/s" : "";
         }
     }
-    public static void SetContextWindowSize(int size) => _contextWindowSize = size;
-    public static double ContextRatio(int contextWindowOverride = 0) => CalcContextRatio(contextWindowOverride);
-    public static string ContextText(int contextWindowOverride = 0) => CalcContextText(contextWindowOverride);
-    public static string BalanceDisplay => BalanceDisplayStatic;
+    public static void SetContextWindowSize(int size) => Interlocked.Exchange(ref Default._contextWindowSize, size);
+    public static double ContextRatio(int contextWindowOverride = 0) => Default.CalcContextRatio(contextWindowOverride);
+    public static string ContextText(int contextWindowOverride = 0) => Default.CalcContextText(contextWindowOverride);
+    public static string BalanceDisplay => Default.BalanceDisplayStatic;
     public static async Task FetchBalanceAsync(string defaultProvider, string? apiKey = null)
-        => await FetchBalanceStaticAsync(defaultProvider, apiKey).ConfigureAwait(false);
-    public static string Summary() => BuildSummary();
+        => await Default.FetchBalanceStaticAsync(defaultProvider, apiKey).ConfigureAwait(false);
+    public static string Summary() => Default.BuildSummary();
 
     // ══ Internal helpers (shared by static + interface impl) ══
     public static async Task RefreshModelInfoAsync(string endpoint, string apiKey)
@@ -400,7 +403,7 @@ public sealed class UsageTracker : IUsageTracker
         catch { /* best-effort */ }
     }
 
-    private static int EffectiveContextWindow(int ovr)
+    private int EffectiveContextWindow(int ovr)
     {
         if (ovr > 0) return ovr;
         var modelKey = _activeModel;
@@ -411,19 +414,19 @@ public sealed class UsageTracker : IUsageTracker
             : KnownContextWindows.TryGetValue(modelKey, out var known) ? known : 0;
         return Math.Max(modelLimit, _contextWindowSize);
     }
-    private static double CalcContextRatio(int ovr)
+    private double CalcContextRatio(int ovr)
     {
         var max = EffectiveContextWindow(ovr);
         if (max <= 0) return 0;
-        return Math.Clamp((double)PromptTokens / max, 0, 1);
+        return Math.Clamp((double)_promptTokens / max, 0, 1);
     }
-    private static string CalcContextText(int ovr)
+    private string CalcContextText(int ovr)
     {
         var max = EffectiveContextWindow(ovr);
         if (max <= 0) return "";
-        return $"{PromptTokens:N0}/{max:N0} ({(double)PromptTokens / max * 100:F1}%)";
+        return $"{_promptTokens:N0}/{max:N0} {(double)_promptTokens / max * 100:F1}%";
     }
-    private static string BalanceDisplayStatic
+    private string BalanceDisplayStatic
     {
         get
         {
@@ -434,11 +437,11 @@ public sealed class UsageTracker : IUsageTracker
             }
         }
     }
-    private static void SetBalance(double bal, string currency, string source)
+    private void SetBalance(double bal, string currency, string source)
     {
         lock (_balanceLock) { _balance = bal; _balanceCurrency = currency; _balanceSource = source; }
     }
-    private static async Task FetchBalanceStaticAsync(string defaultProvider, string? apiKey)
+    private async Task FetchBalanceStaticAsync(string defaultProvider, string? apiKey)
     {
         try
         {
@@ -620,13 +623,13 @@ public sealed class UsageTracker : IUsageTracker
         return configDefault;
     }
 
-    private static string BuildSummary()
+    private string BuildSummary()
     {
-        var p = PromptTokens;
-        var c = CompletionTokens;
-        return $"Tokens: {p:N0}+{c:N0}={TotalTokens:N0} | "
-             + $"Requests: {Requests} | "
-              + $"Cost: ${EstimatedCost:F4} | "
+        var p = _promptTokens;
+        var c = _completionTokens;
+        return $"Tokens: {p:N0}+{c:N0}={p + c:N0} | "
+             + $"Requests: {_requests} | "
+               + $"Cost: ¥{_totalCost:F4} | "
              + $"Uptime: {_timer.Elapsed:hh\\:mm\\:ss}";
     }
 }

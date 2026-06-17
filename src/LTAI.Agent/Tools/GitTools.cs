@@ -36,6 +36,23 @@ public sealed class GitTools
         }
     }
 
+    private static async Task<string> RunWithTimeoutAsync(Func<Task<string>> action, string errorLabel)
+    {
+        using var cts = new CancellationTokenSource(GitTimeout);
+        try
+        {
+            return await Task.Run(action, cts.Token).ConfigureAwait(false);
+        }
+        catch (AggregateException ae) when (ae.InnerException != null)
+        {
+            return $"{errorLabel}: {ae.InnerException.Message}";
+        }
+        catch (OperationCanceledException)
+        {
+            return $"⏱ {errorLabel} timed out ({GitTimeout.TotalSeconds}s)";
+        }
+    }
+
     // ═══ Status & Log ═══
 
     [Description("显示 Git 仓库状态：已暂存、已修改、未跟踪、已删除的文件列表，以及当前分支和远程进度差。\n"
@@ -253,18 +270,18 @@ public sealed class GitTools
         + "不适用场景：只想本地提交（请用 GitCommit）、只推送已有提交（请用 GitPush）。\n"
         + "关键参数：message — 提交消息；remote — 远程仓库名。注意：此操作会修改远程仓库。")]
     [ToolExample("提交并推送代码")]
-    public string GitCommitAndPush(string message, string remote = "origin")
+    public async Task<string> GitCommitAndPush(string message, string remote = "origin")
     {
-        return RunWithTimeout(() =>
+        return await RunWithTimeoutAsync(() =>
         {
             using var repo = Open();
             var sig = Sig();
             var c = repo.Commit(message, sig, sig);
             var rmt = repo.Network.Remotes[remote];
-            if (rmt == null) return $"Remote '{remote}' not found";
+            if (rmt == null) return Task.FromResult($"Remote '{remote}' not found");
             repo.Network.Push(rmt, $"+refs/heads/{repo.Head.FriendlyName}", new PushOptions());
-            return $"✅ {c.Sha[..8]}: {c.MessageShort.Trim()}\n✅ Pushed to '{remote}'";
-        }, "CommitAndPush");
+            return Task.FromResult($"✅ {c.Sha[..8]}: {c.MessageShort.Trim()}\n✅ Pushed to '{remote}'");
+        }, "CommitAndPush").ConfigureAwait(false);
     }
 
     [Description("撤销上一次提交（软重置，保留工作区的更改）。相当于 git reset --soft HEAD~1。\n"
@@ -311,28 +328,28 @@ public sealed class GitTools
         + "不适用场景：拉取并合并（请用 GitPull）、推送本地更改（请用 GitPush）。\n"
         + "关键参数：remote — 远程仓库名。")]
     [ToolExample("拉取远程最新代码")]
-    public string GitFetch(string remote = "origin") => RunWithTimeout(() =>
+    public async Task<string> GitFetch(string remote = "origin") => await RunWithTimeoutAsync(() =>
     {
         using var repo = Open();
         Commands.Fetch(repo, remote, [], new FetchOptions(), "");
-        return $"✅ Fetched '{remote}'";
-    }, "Fetch");
+        return Task.FromResult($"✅ Fetched '{remote}'");
+    }, "Fetch").ConfigureAwait(false);
 
     [Description("将本地提交推送到远程仓库。\n"
         + "适用场景：将本地代码共享到远程仓库、提交 PR 前推送分支。\n"
         + "不适用场景：拉取远程更新（请用 GitPull/GitFetch）、提交并推送（请用 GitCommitAndPush）。\n"
         + "关键参数：remote — 远程仓库名；branch — 分支名(默认当前分支)。注意：推送会修改远程仓库。")]
     [ToolExample("推送代码到远程")]
-    public string GitPush(string remote = "origin", string? branch = null)
+    public async Task<string> GitPush(string remote = "origin", string? branch = null)
     {
-        return RunWithTimeout(() =>
+        return await RunWithTimeoutAsync(() =>
         {
             using var repo = Open();
             var rmt = repo.Network.Remotes[remote];
-            if (rmt == null) return $"Remote '{remote}' not found";
+            if (rmt == null) return Task.FromResult($"Remote '{remote}' not found");
             repo.Network.Push(rmt, $"+refs/heads/{branch ?? repo.Head.FriendlyName}", new PushOptions());
-            return $"✅ Pushed to '{remote}'";
-        }, "Push");
+            return Task.FromResult($"✅ Pushed to '{remote}'");
+        }, "Push").ConfigureAwait(false);
     }
 
     [Description("从远程仓库拉取并合并到当前分支(pull = fetch + merge)。\n"
@@ -340,11 +357,12 @@ public sealed class GitTools
         + "不适用场景：只拉取不合并（请用 GitFetch）、推送本地更改（请用 GitPush）。\n"
         + "关键参数：remote — 远程仓库名；branch — 分支名。注意：拉取可能产生合并冲突。")]
     [ToolExample("拉取最新的代码")]
-    public string GitPull(string remote = "origin", string? branch = null)
+    public async Task<string> GitPull(string remote = "origin", string? branch = null)
     {
-        return RunWithTimeout(() =>
+        return await RunWithTimeoutAsync(async () =>
         {
-            var fetchResult = GitFetch(remote);
+            var fetchResult = await GitFetch(remote).ConfigureAwait(false);
+            if (!fetchResult.StartsWith("✅")) return fetchResult;
             using var repo = Open();
             var tracked = branch != null ? repo.Branches[$"{remote}/{branch}"] : repo.Head.TrackedBranch;
             if (tracked == null) return "No upstream branch";
@@ -357,7 +375,7 @@ public sealed class GitTools
                 MergeStatus.Conflicts => "❌ Conflicts",
                 var s => $"Pull: {s}"
             };
-        }, "Pull");
+        }, "Pull").ConfigureAwait(false);
     }
 
     [Description("变基(rebase)当前分支到目标分支，使提交历史更线性整洁。\n"
@@ -390,11 +408,11 @@ public sealed class GitTools
         + "不适用场景：普通拉取（请用 GitPull）、合并其他分支（请用 GitMerge）。\n"
         + "关键参数：upstream — 上游远程名；branch — 要同步的分支。注意：同步会合并上游更改到当前分支。")]
     [ToolExample("同步 fork 与上游仓库")]
-    public string GitSyncFork(string upstream = "upstream", string branch = "master")
+    public async Task<string> GitSyncFork(string upstream = "upstream", string branch = "master")
     {
-        return RunWithTimeout(() =>
+        return await RunWithTimeoutAsync(async () =>
         {
-            var fetchResult = GitFetch(upstream);
+            var fetchResult = await GitFetch(upstream).ConfigureAwait(false);
             if (!fetchResult.StartsWith("✅")) return fetchResult;
             using var repo = Open();
             var upstreamBranch = repo.Branches[$"{upstream}/{branch}"];
@@ -406,7 +424,7 @@ public sealed class GitTools
                 MergeStatus.FastForward => $"✅ Synced (fast-forward)",
                 _ => $"Sync result: {result.Status}"
             };
-        }, "SyncFork");
+        }, "SyncFork").ConfigureAwait(false);
     }
 
     // ═══ Merge ═══

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using LTAI.Hpo.Storage;
 
 namespace LTAI.Hpo.Samplers;
 
@@ -31,6 +32,12 @@ public sealed class TpeSampler : ISampler
         _gamma = gamma;
     }
 
+    private static async Task<List<TrialRecord>> LoadCompletedTrialsAsync(IStudyStore store, string studyName)
+    {
+        var records = await store.LoadTrialsAsync(studyName).ConfigureAwait(false);
+        return records.Where(t => t.State is TrialState.Completed or TrialState.Pruned).ToList();
+    }
+
     private List<TrialRecord> GetCompletedTrials(Trial trial)
     {
         var store = trial.Store;
@@ -44,11 +51,7 @@ public sealed class TpeSampler : ISampler
         List<TrialRecord> completed;
         try
         {
-            completed = Task.Run(async () =>
-            {
-                var records = await store.LoadTrialsAsync(trial.StudyName).ConfigureAwait(false);
-                return records.Where(t => t.State is TrialState.Completed or TrialState.Pruned).ToList();
-            }).GetAwaiter().GetResult();
+            completed = LoadCompletedTrialsAsync(store, trial.StudyName).GetAwaiter().GetResult();
         }
         catch
         {

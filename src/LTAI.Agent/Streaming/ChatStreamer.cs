@@ -71,24 +71,24 @@ public sealed class ChatStreamer
                         continue;
                     }
 
-                    if (TryParseToolResultToken(token))
+                    if (await TryParseToolResultToken(token).ConfigureAwait(false))
                         continue;
 
                     if (token.StartsWith("HANDOFF TO "))
                     {
                         _statusText = $"→ {token}";
-                        Refresh();
+                        await RefreshAsync().ConfigureAwait(false);
                         continue;
                     }
                     if (token.StartsWith("[budget:") || token.StartsWith("[note:"))
                     {
                         _statusText = token;
-                        Refresh();
+                        await RefreshAsync().ConfigureAwait(false);
                         continue;
                     }
 
-                    _renderer.OnTextDelta(token);
-                    Refresh();
+                    await _renderer.OnTextDelta(token).ConfigureAwait(false);
+                    await RefreshAsync().ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
@@ -97,7 +97,7 @@ public sealed class ChatStreamer
             }
             catch (Exception ex)
             {
-                _renderer.OnTextDelta($"\n⚠ 流式响应错误: {ex.Message}");
+                await _renderer.OnTextDelta($"\n⚠ 流式响应错误: {ex.Message}").ConfigureAwait(false);
             }
 
             spinCts.Cancel();
@@ -145,7 +145,7 @@ public sealed class ChatStreamer
                     var line = $"{pulse} 思考中... [{timeStr}]";
                     if (!string.IsNullOrEmpty(_statusText))
                         line += $"  {_statusText}";
-                    _renderer.UpdateProgress(pulse, line, timeStr);
+                    await _renderer.UpdateProgress(pulse, line, timeStr).ConfigureAwait(false);
                     _renderer.InvalidateRender();
                 }
             }
@@ -178,7 +178,7 @@ public sealed class ChatStreamer
                     : "";
                 _toolCalls.Add((n, a, ""));
                 _statusText = $"🛠 {n}({Truncate(a, 30)}) [{FormatElapsed(_timer.Elapsed)}]";
-                _renderer.OnToolCall(n, a);
+                await _renderer.OnToolCall(n, a).ConfigureAwait(false);
             }
             if (c is FunctionResultContent frc)
             {
@@ -202,15 +202,15 @@ public sealed class ChatStreamer
                     displayResult = displayResult[..300] + "...";
                 if (_toolCalls.Count > 0)
                     _toolCalls[^1] = (_toolCalls[^1].name, _toolCalls[^1].args, displayResult);
-                _renderer.OnToolResult(
+                await _renderer.OnToolResult(
                     _toolCalls.Count > 0 ? _toolCalls[^1].name : "",
-                    resultStr, success: true);
+                    resultStr, success: true).ConfigureAwait(false);
             }
         }
-        Refresh();
+        await RefreshAsync().ConfigureAwait(false);
     }
 
-    private bool TryParseToolResultToken(string token)
+    private async Task<bool> TryParseToolResultToken(string token)
     {
         var parsed = _renderer.TryParseToolResult(token);
         if (!parsed.Found) return false;
@@ -231,13 +231,13 @@ public sealed class ChatStreamer
                 ? $"✅ {Truncate(parsed.Output, 60)}"
                 : $"❌ {parsed.Error}";
         }
-        Refresh();
+        await RefreshAsync().ConfigureAwait(false);
         return true;
     }
 
-    private void Refresh()
+    private async ValueTask RefreshAsync()
     {
-        _renderer.UpdateProgress("", $"思考中...  {_statusText}", null);
+        await _renderer.UpdateProgress("", $"思考中...  {_statusText}", null).ConfigureAwait(false);
         _renderer.RequestRender();
     }
 

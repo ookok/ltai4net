@@ -147,6 +147,176 @@ public sealed class TextTools
         }
     }
 
+    // ========== APPLY UNIFIED DIFF ==========
+
+    [Description("将 unified diff 补丁应用到文件。支持标准 diff -u 格式、git diff 输出。\n"
+        + "每个 hunk 会验证 context lines 匹配后才应用，失败时自动回滚。\n"
+        + "适用场景：应用 code review 建议、同步 git diff 产出的修改。\n"
+        + "关键参数：path — 文件路径；diff — unified diff 文本（含 @@ hunk headers）。")]
+    public async Task<string> ApplyUnifiedDiff(
+        [Description("文件路径")] string path,
+        [Description("unified diff 文本，格式如：@@ -1,3 +1,4 @@\\n context\\n-old\\n+new")] string diff)
+    {
+        var fp = SafePath(path);
+        if (fp == null) return "Error: path escape";
+        if (!File.Exists(fp)) return "File not found";
+
+        var lines = await File.ReadAllLinesAsync(fp).ConfigureAwait(false);
+        var hunks = ParseUnifiedHunks(diff);
+        if (hunks.Count == 0) return "No valid hunks found in diff";
+
+        var result = new List<string>(lines);
+        var applied = 0;
+        var failedHunks = new List<int>();
+
+        for (int hi = 0; hi < hunks.Count; hi++)
+        {
+            var (oldStart, hunkLines) = hunks[hi];
+
+            // Find the anchor: match first context or removed line in current result
+            var anchorIdx = -1;
+            for (int i = 0; i < result.Count; i++)
+            {
+                var firstHunkLine = hunkLines[0];
+                var content = firstHunkLine.Length > 1 ? firstHunkLine[1..] : "";
+                if (result[i] == content)
+                {
+                    anchorIdx = i;
+                    break;
+                }
+            }
+
+            if (anchorIdx < 0)
+            {
+                failedHunks.Add(hi);
+                continue;
+            }
+
+            // Verify context lines and apply
+            var canApply = true;
+            var ri = anchorIdx;
+            var toRemove = new List<int>();
+            var toInsert = new List<(int index, string line)>();
+
+            foreach (var hl in hunkLines)
+            {
+                if (hl.Length == 0) continue;
+                var prefix = hl[0];
+                var content = hl.Length > 1 ? hl[1..] : "";
+
+                if (prefix == ' ')
+                {
+                    if (ri >= result.Count || result[ri] != content)
+                    {
+                        // Try next line (some editors strip trailing whitespace)
+                        if (ri + 1 < result.Count && result[ri + 1] == content)
+                            ri++;
+                        else
+                        {
+                            canApply = false;
+                            break;
+                        }
+                    }
+                    ri++;
+                }
+                else if (prefix == '-')
+                {
+                    if (ri < result.Count && result[ri] == content)
+                    {
+                        toRemove.Add(ri);
+                        ri++;
+                    }
+                    else if (ri < result.Count && result[ri].TrimEnd() == content.TrimEnd())
+                    {
+                        toRemove.Add(ri);
+                        ri++;
+                    }
+                    else
+                    {
+                        canApply = false;
+                        break;
+                    }
+                }
+                else if (prefix == '+')
+                {
+                    toInsert.Add((ri, content));
+                }
+            }
+
+            if (!canApply)
+            {
+                failedHunks.Add(hi);
+                continue;
+            }
+
+            // Apply: remove in reverse order, insert in order
+            // Adjust indices based on prior insertions
+            for (int i = toRemove.Count - 1; i >= 0; i--)
+                result.RemoveAt(toRemove[i]);
+
+            var insertOffset = 0;
+            foreach (var (idx, line) in toInsert)
+            {
+                result.Insert(idx + insertOffset, line);
+                insertOffset++;
+            }
+
+            applied++;
+        }
+
+        if (applied > 0)
+        {
+            await AtomicWriteAsync(fp, string.Join("\n", result) + "\n").ConfigureAwait(false);
+        }
+
+        var summary = $"Unified diff: {applied} hunk(s) applied";
+        if (failedHunks.Count > 0)
+            summary += $", {failedHunks.Count} hunk(s) failed (context mismatch)";
+        return summary;
+    }
+
+    private static List<(int oldStart, List<string> lines)> ParseUnifiedHunks(string diff)
+    {
+        var hunks = new List<(int oldStart, List<string> lines)>();
+        var diffLines = diff.Split('\n');
+        List<string>? currentHunk = null;
+
+        foreach (var line in diffLines)
+        {
+            var trimmed = line.TrimEnd('\r');
+            if (trimmed.StartsWith("@@ ") && trimmed.Contains(" @@"))
+            {
+                if (currentHunk != null && currentHunk.Count > 0)
+                {
+                    var oldStart = ParseHunkStart(currentHunk[0]);
+                    hunks.Add((oldStart, currentHunk.Skip(1).ToList()));
+                }
+                currentHunk = [trimmed];
+            }
+            else if (currentHunk != null && (trimmed.Length == 0 || trimmed[0] is ' ' or '-' or '+'))
+            {
+                currentHunk.Add(trimmed);
+            }
+        }
+
+        if (currentHunk != null && currentHunk.Count > 1)
+        {
+            var oldStart = ParseHunkStart(currentHunk[0]);
+            hunks.Add((oldStart, currentHunk.Skip(1).ToList()));
+        }
+
+        return hunks;
+    }
+
+    private static int ParseHunkStart(string header)
+    {
+        // @@ -old_start,old_count +new_start,new_count @@
+        var m = Regex.Match(header, @"@@\s+-(\d+)");
+        if (m.Success && int.TryParse(m.Groups[1].Value, out var start))
+            return start;
+        return 1;
+    }
+
     // ========== DIFF ==========
 
     [Description("比较两个文件或两段文本的内容差异，返回 unified diff 格式。\n"

@@ -8,10 +8,10 @@ public sealed class AgentDefinitionTests
     private static IReadOnlyList<AgentFileDef> AllAgents => AgentRegistry.LoadAll();
 
     [Fact]
-    public void LoadAll_Returns19Agents()
+    public void LoadAll_ReturnsAllAgents()
     {
         var defs = AllAgents;
-        Assert.Equal(19, defs.Count);
+        Assert.Equal(21, defs.Count);
     }
 
     [Theory]
@@ -34,6 +34,7 @@ public sealed class AgentDefinitionTests
     [InlineData("LTAI-Security")]
     [InlineData("LTAI-DevOps")]
     [InlineData("LTAI-Office")]
+    [InlineData("LTAI-ScrumMaster")]
     public void EachAgent_ExistsAndHasRequiredFields(string agentName)
     {
         var def = AllAgents.FirstOrDefault(d => d.Name == agentName);

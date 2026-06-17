@@ -38,7 +38,7 @@ namespace LTAI.Agent;
 ///  [14] CacheAlignerProvider      — KV-cache alignment hints
 ///  [15] LspDiagnosticsProvider    — LSP diagnostics
 ///
-/// Note: ToolRetrievalProvider has been replaced by ToolFilteringChatClient
+    /// Note: ToolRetrievalProvider (removed) was replaced by ToolFilteringChatClient
 /// (a MAF IChatClient middleware) to avoid ordering conflicts with
 /// HarnessAgent's built-in providers (FileAccessProvider, BackgroundAgentsProvider).
 /// Tool filtering now runs at the IChatClient level, after all AIContextProviders
@@ -58,11 +58,12 @@ internal static class AgentContextProviderBuilder
         var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
         var specSvc = new SpecService(opts.ResolveDataPath("specs"));
 
-        var providers = new List<AIContextProvider>(17)
+        var providers = new List<AIContextProvider>(18)
         {
             new SkillRankingProvider(
                 sp.GetRequiredService<SkillEvolutionEngine>(),
                 loggerFactory.CreateLogger<SkillRankingProvider>()),
+            new MemoryAuthorityProvider(),
             new L0IdentityProvider(identityText),
             new L1EssentialProvider(palaceStore, name,
                 sp.GetService<EntropyTracker>(),
@@ -82,7 +83,7 @@ internal static class AgentContextProviderBuilder
                 loggerFactory.CreateLogger<L4DeepSearchProvider>()),
             new L6AgentDiaryProvider(palaceStore, name,
                 loggerFactory.CreateLogger<L6AgentDiaryProvider>()),
-            sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
+            sp.GetRequiredService<LTAI.Agent.Indexing.ProvenanceProvider>(),
             new InstructionProvider(modelId),
             new EnvironmentProvider(), skillsProvider,
             new CacheAlignerProvider(

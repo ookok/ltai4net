@@ -18,7 +18,7 @@ using TurboQuant.Core.Packing;
 namespace LTAI.Agent.Memory;
 
 [ToolDomain("memory")]
-public sealed class PalaceStore : IDisposable
+public sealed partial class PalaceStore : IDisposable
 {
     private const string Schema = """
         CREATE TABLE IF NOT EXISTS palace (
@@ -67,6 +67,7 @@ public sealed class PalaceStore : IDisposable
 
     private readonly EmbeddingClient _embedder;
     private readonly string _connectionString;
+    internal string ConnectionString => _connectionString;
     private readonly string _dbPath;
     private readonly ILogger<PalaceStore>? _logger;
     private bool _schemaReady;
@@ -95,6 +96,7 @@ public sealed class PalaceStore : IDisposable
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath, Mode = SqliteOpenMode.ReadWriteCreate, Cache = SqliteCacheMode.Shared,
+            Pooling = true,
         }.ToString();
         EnsureSchema();
     }
@@ -226,7 +228,7 @@ public sealed class PalaceStore : IDisposable
     // Sync overload for backward compat
     public bool TouchDrawer(string wing, string room, string drawerId, double importance)
     {
-        return Task.Run(() => TouchDrawerAsync(wing, room, drawerId, importance)).GetAwaiter().GetResult();
+        return TouchDrawerAsync(wing, room, drawerId, importance).GetAwaiter().GetResult();
     }
 
     public Drawer? GetDrawer(string wing, string room, string drawerId)
@@ -720,10 +722,6 @@ public sealed class PalaceStore : IDisposable
         return list;
     }
 
-    [Obsolete("Use SearchByWingExact instead.")]
-    public IReadOnlyList<Drawer> SearchByRoomExact(string wing, string? agentId = null)
-        => SearchByWingExact(wing, agentId);
-
     public IReadOnlyList<Drawer> SearchByWingExact(string wing, string? agentId = null)
     {
         EnsureSchema();
@@ -740,10 +738,6 @@ public sealed class PalaceStore : IDisposable
         while (rdr.Read()) list.Add(ReadDrawer(rdr));
         return list;
     }
-
-    [Obsolete("Use SearchByWingExactAsync instead.")]
-    public async Task<IReadOnlyList<Drawer>> SearchByRoomExactAsync(string wing, string? agentId = null)
-        => await SearchByWingExactAsync(wing, agentId).ConfigureAwait(false);
 
     public async Task<IReadOnlyList<Drawer>> SearchByWingExactAsync(string wing, string? agentId = null)
     {
@@ -1001,6 +995,9 @@ public sealed class PalaceStore : IDisposable
             if (_schemaReady) return;
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
+            using var pragmaCmd = conn.CreateCommand();
+            pragmaCmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000";
+            pragmaCmd.ExecuteNonQuery();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = Schema;
             cmd.ExecuteNonQuery();
@@ -1033,7 +1030,7 @@ public sealed class PalaceStore : IDisposable
 
     private static double CosineSimilarity(float[] a, float[] b) => VectorMath.CosineSimilarity(a.AsSpan(), b.AsSpan());
 
-    private static Drawer ReadDrawer(SqliteDataReader r)
+    internal static Drawer ReadDrawer(SqliteDataReader r)
     {
         var baseDrawer = new Drawer(
             r.GetString(0), r.GetString(1), r.GetString(2),
@@ -1103,12 +1100,15 @@ public sealed class PalaceStore : IDisposable
             .Trim();
 
         // Remove boolean operators as standalone tokens (not substrings)
-        sanitized = Regex.Replace(sanitized, @"\b(AND|OR|NOT|NEAR)\b", " ", RegexOptions.IgnoreCase);
+        sanitized = Fts5OperatorPattern().Replace(sanitized, " ");
         sanitized = Regex.Replace(sanitized, @"\s+", " ").Trim();
 
         if (sanitized.Length == 0) return "\"\"";
         return $"\"{sanitized}\"";
     }
+
+    [GeneratedRegex(@"\b(AND|OR|NOT|NEAR)\b", RegexOptions.IgnoreCase, 1000)]
+    private static partial Regex Fts5OperatorPattern();
 
     /// <summary>
     /// RRF (Reciprocal Rank Fusion) hybrid search: combines FTS5 BM25 + HNSW semantic.

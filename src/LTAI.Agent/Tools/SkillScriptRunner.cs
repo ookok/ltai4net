@@ -119,9 +119,14 @@ public static class SkillScriptRunner
     private static string FormatArgs(JsonElement? args)
     {
         if (args == null) return "";
+        var isWindows = OperatingSystem.IsWindows();
         var items = new List<string>();
         foreach (var item in args.Value.EnumerateArray())
-            items.Add($"\"{item.GetString() ?? item.GetRawText()}\"");
+        {
+            var val = item.GetString() ?? item.GetRawText();
+            var escaped = isWindows ? ShellSecurity.EscapeCmdArg(val) : ShellSecurity.EscapeBashArg(val);
+            items.Add($"\"{escaped}\"");
+        }
         return string.Join(" ", items);
     }
 }

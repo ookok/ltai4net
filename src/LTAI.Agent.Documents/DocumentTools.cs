@@ -24,6 +24,10 @@ public sealed class DocumentTools
         RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex PlaceholderPattern = new(@"\{\{[^}]*\}\}", RegexOptions.Compiled);
     private static readonly int[] Pow26 = [1, 26, 676, 17576, 456976, 11881376];
+    private static readonly OpenSettings _safeOpenSettings = new()
+    {
+        MaxCharactersInPart = 50_000_000,
+    };
     private readonly string _ws;
     private readonly IKbQueryable? _kbGraph;
     private readonly ILogger<DocumentTools>? _logger;
@@ -48,7 +52,7 @@ public sealed class DocumentTools
         if (fp == null) return "Error: path escape";
         try
         {
-            using var doc = SpreadsheetDocument.Open(fp, false);
+            using var doc = SpreadsheetDocument.Open(fp, false, _safeOpenSettings);
             var wbPart = doc.WorkbookPart;
             var data = wbPart!.Workbook.Descendants<Sheet>()
                 .FirstOrDefault(s => s.Name == sheet);
@@ -127,7 +131,7 @@ public sealed class DocumentTools
                     try
                     {
                         File.Copy(fp, bakPath, overwrite: true);
-                        using var doc = SpreadsheetDocument.Open(bakPath, true);
+                        using var doc = SpreadsheetDocument.Open(bakPath, true, _safeOpenSettings);
                         WriteExcelContent(doc, cells);
                         File.Move(bakPath, tmpPath);
                     }
@@ -195,10 +199,10 @@ public sealed class DocumentTools
 
         try
         {
-            using var srcDoc = SpreadsheetDocument.Open(srcFp, false);
+            using var srcDoc = SpreadsheetDocument.Open(srcFp, false, _safeOpenSettings);
             using var tgtDoc = create || !File.Exists(tgtFp)
                 ? SpreadsheetDocument.Create(tgtFp, SpreadsheetDocumentType.Workbook)
-                : SpreadsheetDocument.Open(tgtFp, true);
+                : SpreadsheetDocument.Open(tgtFp, true, _safeOpenSettings);
 
             var srcWb = srcDoc.WorkbookPart!;
             var srcSheet = srcWb.Workbook.Descendants<Sheet>().First();
@@ -283,7 +287,7 @@ public sealed class DocumentTools
         if (fp == null) return "Error: path escape";
         try
         {
-            using var doc = SpreadsheetDocument.Open(fp, false);
+            using var doc = SpreadsheetDocument.Open(fp, false, _safeOpenSettings);
             var wb = doc.WorkbookPart!;
             var s = wb.Workbook.Descendants<Sheet>().FirstOrDefault(x => x.Name == sheet);
             if (s == null) return $"Sheet '{sheet}' not found";
@@ -338,7 +342,7 @@ public sealed class DocumentTools
         if (fp == null) return "Error: path escape";
         try
         {
-            using var doc = WordprocessingDocument.Open(fp, false);
+            using var doc = WordprocessingDocument.Open(fp, false, _safeOpenSettings);
             var body = doc.MainDocumentPart?.Document.Body;
             if (body == null) return "Empty document";
             var text = string.Join("\n", body.Descendants<Paragraph>().Select(p => p.InnerText));
@@ -372,7 +376,7 @@ public sealed class DocumentTools
                     try
                     {
                         File.Copy(fp, bakPath, overwrite: true);
-                        using var doc = WordprocessingDocument.Open(bakPath, true);
+                        using var doc = WordprocessingDocument.Open(bakPath, true, _safeOpenSettings);
                         WriteWordContent(doc, content, format);
                         File.Move(bakPath, tmpPath);
                     }
@@ -418,8 +422,8 @@ public sealed class DocumentTools
         if (srcFp == null || tgtFp == null) return "Error: path escape";
         try
         {
-            using var srcDoc = WordprocessingDocument.Open(srcFp, false);
-            using var tgtDoc = WordprocessingDocument.Open(tgtFp, true);
+            using var srcDoc = WordprocessingDocument.Open(srcFp, false, _safeOpenSettings);
+            using var tgtDoc = WordprocessingDocument.Open(tgtFp, true, _safeOpenSettings);
 
             var srcStyles = srcDoc.MainDocumentPart?.StyleDefinitionsPart;
             if (srcStyles == null) return "No styles found in source document";
@@ -456,7 +460,7 @@ public sealed class DocumentTools
         if (fp == null) return "Error: path escape";
         try
         {
-            using var doc = WordprocessingDocument.Open(fp, false);
+            using var doc = WordprocessingDocument.Open(fp, false, _safeOpenSettings);
             var sp = doc.MainDocumentPart?.StyleDefinitionsPart?.Styles;
             if (sp == null) return "No styles found";
 
@@ -489,7 +493,7 @@ public sealed class DocumentTools
         if (fp == null) return "Error: path escape";
         try
         {
-            using var doc = PresentationDocument.Open(fp, false);
+            using var doc = PresentationDocument.Open(fp, false, _safeOpenSettings);
             var sb = new StringBuilder();
             int slideNum = 0;
             foreach (var slidePart in doc.PresentationPart!.SlideParts)
@@ -532,7 +536,7 @@ public sealed class DocumentTools
                     try
                     {
                         File.Copy(fp, bakPath, overwrite: true);
-                        using var doc = PresentationDocument.Open(bakPath, true);
+                        using var doc = PresentationDocument.Open(bakPath, true, _safeOpenSettings);
                         WritePptContent(doc, content);
                         File.Move(bakPath, tmpPath);
                     }
@@ -583,7 +587,7 @@ public sealed class DocumentTools
         if (fp == null) return "Error: path escape";
         try
         {
-            using var doc = PresentationDocument.Open(fp, false);
+            using var doc = PresentationDocument.Open(fp, false, _safeOpenSettings);
             var sb = new StringBuilder();
             foreach (var slidePart in doc.PresentationPart!.SlideParts.Take(5))
             {
@@ -621,8 +625,8 @@ public sealed class DocumentTools
         if (srcFp == null || tgtFp == null) return "Error: path escape";
         try
         {
-            using var srcDoc = PresentationDocument.Open(srcFp, false);
-            using var tgtDoc = PresentationDocument.Open(tgtFp, true);
+            using var srcDoc = PresentationDocument.Open(srcFp, false, _safeOpenSettings);
+            using var tgtDoc = PresentationDocument.Open(tgtFp, true, _safeOpenSettings);
 
             var srcMaster = srcDoc.PresentationPart?.SlideMasterParts.FirstOrDefault();
             if (srcMaster == null) return "No slide master in source";

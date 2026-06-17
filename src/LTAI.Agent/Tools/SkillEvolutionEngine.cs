@@ -25,6 +25,13 @@ public sealed class SkillStat
 /// L2: parameter tuning + existing skill updates (LLM-driven, periodic)
 /// L3: skill create/update/prune/merge (LLM-driven, periodic)
 /// Thread-safe, persisted via filesystem.
+///
+/// SkillOpt-inspired extensions (v2):
+/// - ValidationGate: held-out validation before accepting edits
+/// - EditBudget: textual learning rate limiting change per epoch
+/// - RejectedBuffer: prevents re-proposing rejected edits
+/// - EvalBenchmark: staging→production pipeline with auto-rollback
+/// - BestSkillFormat: standardized output with performance metadata
 /// </summary>
 public sealed class SkillEvolutionEngine
 {
@@ -34,8 +41,14 @@ public sealed class SkillEvolutionEngine
     private readonly string _skillsDir;
     private int _totalCalls;
 
+    private readonly SkillValidationGate? _validationGate;
+    private readonly SkillEditBudget? _editBudget;
+    private readonly SkillRejectedBuffer? _rejectedBuffer;
+    private readonly SkillEvalBenchmark? _evalBenchmark;
+
     private const int L2Interval = 500;
     private const int L3Interval = 5000;
+    private const int EvalInterval = 1000;
     private const int MaxAutoEvolvedSkills = 50;
     private const int SkillRetentionDays = 90;
 
@@ -43,11 +56,25 @@ public sealed class SkillEvolutionEngine
     private readonly HashSet<string> _autoEvolvedSkills = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _skillsLock = new();
 
-    public SkillEvolutionEngine(IChatClient llm, ILogger<SkillEvolutionEngine> logger, string skillsDir)
+    public SkillEvolutionEngine(
+        IChatClient llm,
+        ILogger<SkillEvolutionEngine> logger,
+        string skillsDir,
+        SkillValidationGate? validationGate = null,
+        SkillEditBudget? editBudget = null,
+        SkillRejectedBuffer? rejectedBuffer = null,
+        SkillEvalBenchmark? evalBenchmark = null)
     {
         _llm = llm;
         _logger = logger;
         _skillsDir = skillsDir;
+        _validationGate = validationGate;
+        _editBudget = editBudget;
+        _rejectedBuffer = rejectedBuffer;
+        _evalBenchmark = evalBenchmark;
+
+        Directory.CreateDirectory(Path.Combine(skillsDir, "auto-evolved"));
+        Directory.CreateDirectory(Path.Combine(skillsDir, "archived"));
         LoadAutoEvolvedRegistry();
     }
 
@@ -79,14 +106,53 @@ public sealed class SkillEvolutionEngine
              : 1.0;
     }
 
-    /// <summary>Trigger periodic L2/L3 evolution. Call after each RecordCall.</summary>
+    /// <summary>Trigger periodic L2/L3/Eval evolution. Call after each RecordCall.</summary>
     public async Task MaybeEvolveAsync(CancellationToken ct = default)
     {
         var calls = Volatile.Read(ref _totalCalls);
         if (calls > 0 && calls % L2Interval == 0)
             await RunL2EvolutionAsync(ct).ConfigureAwait(false);
+        if (calls > 0 && calls % EvalInterval == 0 && _evalBenchmark != null)
+            await RunEvalBenchmarkAsync(ct).ConfigureAwait(false);
         if (calls > 0 && calls % L3Interval == 0)
             await RunL3EvolutionAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Evaluate staging skills and promote those that pass validation.</summary>
+    private async Task RunEvalBenchmarkAsync(CancellationToken ct)
+    {
+        if (_evalBenchmark == null || _validationGate == null) return;
+
+        var stagingDir = Path.Combine(_skillsDir, "staging");
+        if (!Directory.Exists(stagingDir)) return;
+
+        var stagingFiles = Directory.GetFiles(stagingDir, "*.skill.md");
+        if (stagingFiles.Length == 0) return;
+
+        _logger.LogInformation("[SkillEvo-Eval] Evaluating {Count} staging skills", stagingFiles.Length);
+
+        foreach (var stagingPath in stagingFiles)
+        {
+            if (ct.IsCancellationRequested) break;
+
+            var skillName = Path.GetFileNameWithoutExtension(stagingPath);
+            var newContent = await File.ReadAllTextAsync(stagingPath, ct).ConfigureAwait(false);
+            var oldContent = _evalBenchmark.GetProductionContent(skillName);
+            var body = BestSkillFormat.StripMetadata(newContent);
+
+            var result = await _evalBenchmark.EvaluateAndPromoteAsync(
+                skillName, newContent, oldContent, ct).ConfigureAwait(false);
+
+            if (!result.Promoted)
+            {
+                _logger.LogInformation(
+                    "[SkillEvo-Eval] {Skill} failed validation (score={Score:F4}), keeping in staging",
+                    skillName, result.Score);
+
+                if (_rejectedBuffer != null)
+                    _rejectedBuffer.RecordRejection(skillName, body, result.Reason);
+            }
+        }
     }
 
     // ═══════════════════════════════════════════
@@ -251,6 +317,7 @@ public sealed class SkillEvolutionEngine
 
     // ═══════════════════════════════════════════
     //  Shared LLM action dispatcher
+    //  (SkillOpt-inspired: ValidationGate + EditBudget + RejectedBuffer + EvalBenchmark)
     // ═══════════════════════════════════════════
 
     private async Task LlmActionAsync(string prompt, CancellationToken ct)
@@ -302,11 +369,11 @@ public sealed class SkillEvolutionEngine
                             break;
                         case "update_skill":
                         case "update" when markdown != null:
-                            await WriteSkillFileAsync(skillName, "", markdown!, ct).ConfigureAwait(false);
+                            await ValidatedWriteAsync(skillName, "", markdown!, false, ct).ConfigureAwait(false);
                             break;
                         case "create_skill":
                         case "create" when markdown != null:
-                            await WriteSkillFileAsync(skillName, "", markdown!, ct).ConfigureAwait(false);
+                            await ValidatedWriteAsync(skillName, "", markdown!, true, ct).ConfigureAwait(false);
                             break;
                     }
                 }
@@ -321,7 +388,7 @@ public sealed class SkillEvolutionEngine
                     var description = s.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
                     var markdown = s.TryGetProperty("markdown", out var m) ? m.GetString() : null;
                     if (markdown != null)
-                        await WriteSkillFileAsync(name, description, markdown, ct).ConfigureAwait(false);
+                        await ValidatedWriteAsync(name, description, markdown, true, ct).ConfigureAwait(false);
                 }
             }
         }
@@ -329,6 +396,94 @@ public sealed class SkillEvolutionEngine
         {
             _logger.LogWarning(ex, "[SkillEvo] Failed to parse LLM response: {Raw}", raw);
         }
+    }
+
+    /// <summary>
+    /// SkillOpt-inspired validated write pipeline:
+    /// 1. RejectedBuffer check — skip if this content was previously rejected
+    /// 2. EditBudget check — skip if budget exhausted for this epoch
+    /// 3. BestSkillFormat — standardize output with performance metadata
+    /// 4. ValidationGate — held-out validation before acceptance
+    /// 5. EvalBenchmark — write to staging, evaluate, promote if passed
+    /// Fallback to direct write if any component is null.
+    /// </summary>
+    private async Task ValidatedWriteAsync(
+        string name, string description, string markdown, bool isNew, CancellationToken ct)
+    {
+        var oldContent = !isNew ? GetExistingContent(name) : null;
+
+        // Step 1: RejectedBuffer — skip previously rejected content
+        if (_rejectedBuffer != null && _rejectedBuffer.WasRejected(name, markdown))
+        {
+            _logger.LogInformation("[SkillEvo] Skipped {Name}: content was previously rejected", name);
+            return;
+        }
+
+        // Step 2: EditBudget — check if we have budget for this change
+        if (_editBudget != null && !_editBudget.TrySpend(name, oldContent ?? "", markdown))
+        {
+            _logger.LogInformation("[SkillEvo] Budget exhausted for {Name}, skipping edit", name);
+            return;
+        }
+
+        // Step 3: BestSkillFormat — standardize with metadata
+        var accuracy = _stats.TryGetValue(name, out var stat) ? stat.SuccessRate : (double?)null;
+        var editCount = _editBudget?.GetEditCount(name);
+        var epoch = editCount.HasValue ? editCount / 10 + 1 : 1;
+        var body = BestSkillFormat.StripMetadata(markdown);
+        var standardized = BestSkillFormat.Build(
+            name, description, body,
+            accuracy: accuracy,
+            editCount: editCount,
+            epoch: epoch);
+
+        // Step 4+5: ValidationGate + EvalBenchmark pipeline
+        if (_evalBenchmark != null && _validationGate != null)
+        {
+            var result = await _evalBenchmark.EvaluateAndPromoteAsync(
+                name, standardized, oldContent, ct).ConfigureAwait(false);
+
+            if (result.Promoted)
+            {
+                lock (_skillsLock) { _autoEvolvedSkills.Add(SanitizeFileName(name) + ".skill.md"); }
+                SaveAutoEvolvedRegistry();
+                _logger.LogInformation("[SkillEvo] Validated and promoted: {Name} (score={Score:F4})",
+                    name, result.Score);
+
+                // Update metadata with validation score
+                var prodContent = _evalBenchmark.GetProductionContent(name);
+                if (prodContent != null)
+                {
+                    var withMeta = BestSkillFormat.UpdateMetadata(prodContent, "validation_score",
+                        result.Score.ToString("F4"));
+                    withMeta = BestSkillFormat.UpdateMetadata(withMeta, "validated_at",
+                        DateTime.UtcNow.ToString("O"));
+                    withMeta = BestSkillFormat.UpdateMetadata(withMeta, "promoted",
+                        result.Promoted.ToString().ToLowerInvariant());
+                    await File.WriteAllTextAsync(
+                        _evalBenchmark.GetProductionPath(name) ?? Path.Combine(_skillsDir, "auto-evolved", SanitizeFileName(name) + ".skill.md"),
+                        withMeta, ct).ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                _logger.LogInformation("[SkillEvo] {Name} failed validation (score={Score:F4}), kept in staging",
+                    name, result.Score);
+                if (_rejectedBuffer != null)
+                    _rejectedBuffer.RecordRejection(name, body, result.Reason);
+            }
+        }
+        else
+        {
+            // No validation gate — direct write (legacy path)
+            await WriteSkillFileAsync(name, description, standardized, ct).ConfigureAwait(false);
+        }
+    }
+
+    private string? GetExistingContent(string skillName)
+    {
+        var path = Path.Combine(_skillsDir, "auto-evolved", SanitizeFileName(skillName) + ".skill.md");
+        return File.Exists(path) ? File.ReadAllText(path) : null;
     }
 
     // ═══════════════════════════════════════════

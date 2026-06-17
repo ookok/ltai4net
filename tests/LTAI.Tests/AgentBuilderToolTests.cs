@@ -40,7 +40,7 @@ public class AgentBuilderToolTests
     public void RegisterShellTools_ContainsPwsh()
     {
         var tools = InvokeRegister("RegisterFileAndTextTools",
-            ["LTAI-Chat", false, false, false, true, ".", null, null]);
+            ["LTAI-Chat", false, false, false, true, ".", null!, null!]);
 
         Assert.Contains(tools, t => t.Name == "RunCommand");
     }
@@ -49,7 +49,7 @@ public class AgentBuilderToolTests
     public void RegisterFileTools_ContainsRead()
     {
         var tools = InvokeRegister("RegisterFileAndTextTools",
-            ["LTAI-Chat", true, false, false, false, ".", null, null]);
+            ["LTAI-Chat", true, false, false, false, ".", null!, null!]);
 
         Assert.Contains(tools, t => t.Name == "ReadFileContent");
     }
@@ -61,5 +61,16 @@ public class AgentBuilderToolTests
             ["LTAI-Chat", null!, null]);
 
         Assert.Contains(tools, t => t.Name == "WebSearch");
+    }
+}
+
+file static class AgentBuilderToolTestHelpers
+{
+    internal static object[] InvokeRegister(string methodName, params object[] args)
+    {
+        var type = typeof(LTAI.AI.ToolRegistry);
+        var method = type.GetMethod(methodName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        var result = method!.Invoke(null, args);
+        return (object[])result!;
     }
 }

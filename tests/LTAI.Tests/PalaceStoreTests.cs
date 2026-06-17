@@ -5,6 +5,7 @@ using Xunit;
 
 namespace LTAI.Tests;
 
+[Trait("Category", "Integration")]
 public sealed class PalaceStoreTests : IDisposable
 {
     private readonly string _dbPath;

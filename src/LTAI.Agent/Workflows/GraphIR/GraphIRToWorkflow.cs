@@ -37,7 +37,7 @@ public sealed class GraphIRToWorkflow
         return BuildSequentialWorkflow(ir, analysis);
     }
 
-    private static GraphAnalysis AnalyzeGraph(WorkflowGraphIR ir)
+    internal static GraphAnalysis AnalyzeGraph(WorkflowGraphIR ir)
     {
         var hasSwitch = ir.Nodes.Any(n => n.Type == GraphNodeType.Switch);
         var hasLoop = ir.Nodes.Any(n => n.Type == GraphNodeType.Loop);
@@ -240,7 +240,7 @@ public sealed class GraphIRToWorkflow
         return builder.Build(validateOrphans: false);
     }
 
-    private static bool MatchCondition(string? msg, string condition)
+    internal static bool MatchCondition(string? msg, string condition)
     {
         if (msg == null) return false;
         if (condition.Contains(".approved"))
@@ -250,7 +250,7 @@ public sealed class GraphIRToWorkflow
         return msg.Contains(condition, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static List<List<string>> ComputeLevels(WorkflowGraphIR ir)
+    internal static List<List<string>> ComputeLevels(WorkflowGraphIR ir)
     {
         var levels = new List<List<string>>();
         var remaining = new HashSet<string>(ir.Nodes.Select(n => n.Id));
@@ -274,7 +274,7 @@ public sealed class GraphIRToWorkflow
         return levels;
     }
 
-    private static List<GraphNode> TopologicalSort(WorkflowGraphIR ir)
+    internal static List<GraphNode> TopologicalSort(WorkflowGraphIR ir)
     {
         var sorted = new List<GraphNode>();
         var visited = new HashSet<string>();
@@ -317,7 +317,7 @@ public sealed class GraphIRToWorkflow
         return sorted;
     }
 
-    private sealed class GraphAnalysis
+    internal sealed class GraphAnalysis
     {
         public bool HasSwitch { get; init; }
         public bool HasLoop { get; init; }

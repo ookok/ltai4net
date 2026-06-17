@@ -22,6 +22,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="Terminal.Gui" HintPath="..\..\dist\lib\terminal.gui\Terminal.Gui.dll" Condition="Exists('..\..\dist\lib\terminal.gui\Terminal.Gui.dll')" />
+    <Reference Include="Terminal.Gui.Editor" HintPath="..\..\dist\lib\editor\Terminal.Gui.Editor.dll" Condition="Exists('..\..\dist\lib\editor\Terminal.Gui.Editor.dll')" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\LTAI.TUI\LTAI.TUI.csproj" />
   </ItemGroup>
 

@@ -21,6 +21,7 @@
 
 using System.Collections.Concurrent;
 using System.Text;
+using System.Text.RegularExpressions;
 using LTAI.Agent.LanguageServer;
 using LTAI.Agent.Tools;
 using LTAI.Agent.CodeAnalysis;
@@ -494,9 +495,7 @@ public sealed class GrammarCheckStep : IPipelineStep
         var paths = new List<string>();
 
         // 格式 1: path=xxx 或 filePath=xxx (引号可选)
-        var matches = System.Text.RegularExpressions.Regex.Matches(args,
-            @"(?:path|filePath)\s*=\s*[""']?([^""',\s}]+)[""']?",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+        var matches = PipelineRegex.PathArgPattern().Matches(args);
 
         foreach (System.Text.RegularExpressions.Match match in matches)
         {
@@ -509,9 +508,7 @@ public sealed class GrammarCheckStep : IPipelineStep
         }
 
         // 格式 2: JSON 格式 "path":"value" 或 "filePath":"value"
-        var jsonMatches = System.Text.RegularExpressions.Regex.Matches(args,
-            @"""(?:path|filePath)""\s*:\s*""([^""]+)""",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+        var jsonMatches = PipelineRegex.JsonPathArgPattern().Matches(args);
 
         foreach (System.Text.RegularExpressions.Match match in jsonMatches)
         {

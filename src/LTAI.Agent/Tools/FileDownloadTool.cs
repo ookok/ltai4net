@@ -23,10 +23,12 @@ public static class FileDownloadTool
     [ToolExample("下载最新的安装包")]
     public static async Task<string> DownloadFile(
         [Description("文件下载地址")] string url,
-        [Description("保存路径（相对于工作目录）")] string savePath)
+        [Description("保存路径（相对于工作目录）")] string savePath,
+        CancellationToken ct = default)
     {
         // Use a linked CTS so download is cancellable
-        using var dlCts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+        using var dlCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        dlCts.CancelAfter(TimeSpan.FromMinutes(10));
         // ⚠️ SSRF 防护
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
             (uri.Scheme != "http" && uri.Scheme != "https") ||

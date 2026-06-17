@@ -41,8 +41,8 @@ public sealed class ChatAgent
     private readonly int _complexityProFastTrack;
     private readonly int _grammarRetryMaxDepth;
     private readonly int _correctionLoopMaxDepth;
-    private static int _sessionMaxErrors = 5;
-    private static TimeSpan _sessionCircuitDuration = TimeSpan.FromMinutes(5);
+    private int _sessionMaxErrors = 5;
+    private TimeSpan _sessionCircuitDuration = TimeSpan.FromMinutes(5);
 
     private sealed class PerSessionErrorState
     {
@@ -50,16 +50,18 @@ public sealed class ChatAgent
         public DateTime? CircuitOpenUntil;
     }
 
-    private static readonly ConcurrentDictionary<string, PerSessionErrorState> _sessionErrorStates = new(StringComparer.Ordinal);
-    private static readonly ILogger _logger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger("ChatAgent");
+    private readonly ConcurrentDictionary<string, PerSessionErrorState> _sessionErrorStates = new(StringComparer.Ordinal);
+    private readonly GrammarCheckStep _grammarCheck;
+    private readonly PipelineRunner _pipelineRunner;
+    private readonly ILogger _logger;
 
-    private static void RecordSessionError(string sessionId)
+    private void RecordSessionError(string sessionId)
     {
         var state = _sessionErrorStates.GetOrAdd(sessionId, _ => new());
         Interlocked.Increment(ref state.ErrorCount);
     }
 
-    private static bool IsSessionCircuitOpen(string sessionId)
+    private bool IsSessionCircuitOpen(string sessionId)
     {
         if (!_sessionErrorStates.TryGetValue(sessionId, out var state)) return false;
         if (state.CircuitOpenUntil.HasValue && DateTime.UtcNow < state.CircuitOpenUntil.Value)
@@ -72,7 +74,7 @@ public sealed class ChatAgent
         return false;
     }
 
-    private static void ResetSessionErrors(string sessionId)
+    private void ResetSessionErrors(string sessionId)
     {
         if (_sessionErrorStates.TryGetValue(sessionId, out var state))
         {
@@ -98,7 +100,10 @@ public sealed class ChatAgent
         TreeSitterParser? tsParser = null,
         LTAI.Agent.LanguageServer.LspLanguageManager? lspManager = null,
         IMemoryCachingStore? checkpointStore = null,
-        EscalationConfig? escalationConfig = null)
+        EscalationConfig? escalationConfig = null,
+        GrammarCheckStep? grammarCheck = null,
+        PipelineRunner? pipelineRunner = null,
+        ILogger<ChatAgent>? logger = null)
     {
         var cfg = escalationConfig ?? new EscalationConfig();
         _agent = agent;
@@ -115,6 +120,9 @@ public sealed class ChatAgent
         _tsParser = tsParser;
         _lspManager = lspManager;
         _checkpointStore = checkpointStore;
+        _grammarCheck = grammarCheck ?? new GrammarCheckStep(tsParser: tsParser, lspManager: lspManager);
+        _pipelineRunner = pipelineRunner ?? new PipelineRunner(grammarCheck: _grammarCheck);
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ChatAgent>.Instance;
 
         _complexityProFastTrack = cfg.ComplexityProFastTrack;
         _grammarRetryMaxDepth = cfg.GrammarRetryMaxDepth;
@@ -249,6 +257,7 @@ public sealed class ChatAgent
                     {
                         text = retryText;
                         _retryController.RecordSuccess(result.FilePath);
+                        _grammarDepth.Value = 0;
                     }
                 }
                 else
@@ -287,7 +296,7 @@ public sealed class ChatAgent
         // ── Session circuit breaker ──
         if (IsSessionCircuitOpen(sessionId))
         {
-            await FullRegenerationAsync(message, "circuit breaker tripped — too many prior errors", l1State, session, ct);
+            text = await FullRegenerationAsync(message, "circuit breaker tripped — too many prior errors", l1State, session, ct).ConfigureAwait(false);
             return text; // return immediately after full regeneration
         }
 
@@ -489,7 +498,7 @@ public sealed class ChatAgent
                 }
                 catch (OperationCanceledException)
                 {
-                    // User cancelled — stop
+                    _logger?.LogDebug("User cancelled tool approval");
                 }
             }
 
@@ -510,8 +519,7 @@ public sealed class ChatAgent
             foreach (var tc in streamToolCalls)
                 ctx.ToolCalls.Add(tc);
 
-            var step = new GrammarCheckStep(tsParser: _tsParser, lspManager: _lspManager);
-            ctx = await step.ProcessAsync(ctx).ConfigureAwait(false);
+            ctx = await _pipelineRunner.RunPostGenerationAsync(ctx).ConfigureAwait(false);
 
             if (ctx.TryGet<bool>("GrammarCheckBlocked", out var gramBlocked) && gramBlocked)
             {
@@ -965,7 +973,7 @@ public sealed class ChatAgent
                     var sessionJson = await _agent.SerializeSessionAsync(session, cancellationToken: ct).ConfigureAwait(false);
                     sessionData = sessionJson.GetRawText();
                 }
-                catch { /* serialize best-effort */ }
+                catch { _logger?.LogDebug("Session serialization failed (best-effort)"); }
             }
 
             var data = JsonSerializer.Serialize(new CheckpointData
@@ -990,7 +998,7 @@ public sealed class ChatAgent
                     _sessionCheckpointCounters.AddOrUpdate(sessionId, 1, (_, _) => 1);
                     await _checkpointStore.StoreAsync(key, Encoding.UTF8.GetBytes(data), tokenCount, ct).ConfigureAwait(false);
                 }
-                catch { /* compaction best-effort */ }
+                catch { _logger?.LogDebug("Checkpoint compaction failed (best-effort)"); }
             }
         }
         catch (Exception ex)
@@ -1114,7 +1122,7 @@ public sealed class ChatAgent
         return calls;
     }
 
-    /// <summary>运行生成后语法检查。返回是否有语法错误及应注入的系统消息。</summary>
+    /// <summary>运行生成后管线（语法检查/质量门禁/DoD）。返回是否有错误及应注入的系统消息。</summary>
     private async Task<(bool HasErrors, List<ChatMessage> ErrorMessages)> PostGenerationGrammarCheckAsync(
         IList<ChatMessage> messages, CancellationToken ct)
     {
@@ -1126,8 +1134,7 @@ public sealed class ChatAgent
         foreach (var (name, args, result) in toolCalls)
             ctx.ToolCalls.Add((name, args, result));
 
-        var step = new GrammarCheckStep(tsParser: _tsParser, lspManager: _lspManager);
-        ctx = await step.ProcessAsync(ctx).ConfigureAwait(false);
+        ctx = await _pipelineRunner.RunPostGenerationAsync(ctx).ConfigureAwait(false);
 
         if (ctx.TryGet<bool>("GrammarCheckBlocked", out var blocked) && blocked)
         {

@@ -200,8 +200,8 @@ public sealed class SafeChatClient : IChatClient
             return (true, "");
         }
 
-        // ── Shared cache hit ──
-        var cachedVerdict = VerdictCache.Get(text);
+        // ── Shared cache hit (output direction) ──
+        var cachedVerdict = VerdictCache.Get(text, "output");
         if (cachedVerdict.HasValue)
         {
             _logger?.LogDebug("SafeChatClient cache HIT for text len={Len}", text.Length);
@@ -211,7 +211,10 @@ public sealed class SafeChatClient : IChatClient
         // ── LLM safety check for long/complex texts only ──
         // Non-blocking try: if already inside a safety check, skip (safe pass-through).
         if (!_safeLock.Wait(0))
+        {
+            _logger?.LogWarning("SafeChatClient: re-entrant safety check skipped (fail-open) for text len={Len}", text.Length);
             return (true, "");
+        }
 
         try
         {
@@ -235,7 +238,7 @@ public sealed class SafeChatClient : IChatClient
                 result = (true, "");
             }
 
-            VerdictCache.Set(text, result.safe, result.reason);
+            VerdictCache.Set(text, result.safe, result.reason, "output");
 
             return result;
         }

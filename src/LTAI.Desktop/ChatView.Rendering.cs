@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
@@ -105,7 +106,38 @@ public sealed partial class ChatView : UserControl
     private StackPanel? _aiBubbleStack;
     private Border? _aiBubbleBorder;
 
-    private void AddAICopyButton(string text) { }
+    private void AddAICopyButton(string text)
+    {
+        if (_aiBubbleStack == null || string.IsNullOrWhiteSpace(text)) return;
+        var copyBtn = new Button
+        {
+            Content = "📋 复制",
+            FontSize = 11,
+            Padding = new Thickness(8, 2),
+            Margin = new Thickness(0, 4, 0, 0),
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        copyBtn.Click += async (_, _) =>
+        {
+            try
+            {
+                var topLevel = TopLevel.GetTopLevel(this);
+                if (topLevel?.Clipboard != null)
+                {
+                    await topLevel.Clipboard.SetTextAsync(text).ConfigureAwait(false);
+                    copyBtn.Content = "✅ 已复制";
+                    await Task.Delay(1500).ConfigureAwait(false);
+                    copyBtn.Content = "📋 复制";
+                }
+            }
+            catch
+            {
+                copyBtn.Content = "❌ 复制失败";
+            }
+        };
+        _aiBubbleStack.Children.Add(copyBtn);
+    }
 
     private void AddSuggestionCards()
     {

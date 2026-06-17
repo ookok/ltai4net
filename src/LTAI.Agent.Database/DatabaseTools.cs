@@ -41,7 +41,26 @@ public sealed class DatabaseTools
     {
         try
         {
+            // ── SSRF protection: only allow local connections for network databases ──
+            var providerLower = provider.ToLowerInvariant();
+            if (providerLower is "postgresql" or "postgres" or "pgsql" or "mysql" or "mariadb" or "sqlserver" or "mssql")
+            {
+                var host = ExtractHost(connectionString);
+                if (host != null && !IsLocalConnection(host))
+                    return "[SQL] 只允许连接到本地数据库服务器。远程连接已禁用。";
+            }
+
+            // ── Multi-statement injection detection ──
             var trimmed = sql.TrimStart();
+            var semicolonIdx = trimmed.IndexOf(';');
+            if (semicolonIdx >= 0)
+            {
+                // Allow trailing semicolon only (single statement)
+                var afterSemicolon = trimmed[(semicolonIdx + 1)..].Trim();
+                if (afterSemicolon.Length > 0)
+                    return "[SQL] 不支持多条 SQL 语句。一次只允许执行一条语句。";
+            }
+
             var isWrite = trimmed.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase)
                        || trimmed.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase)
                        || trimmed.StartsWith("DELETE", StringComparison.OrdinalIgnoreCase)
@@ -51,11 +70,10 @@ public sealed class DatabaseTools
 
             if (!isWrite && !trimmed.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase)
                 && !trimmed.StartsWith("WITH", StringComparison.OrdinalIgnoreCase)
-                && !trimmed.StartsWith("PRAGMA", StringComparison.OrdinalIgnoreCase)
                 && !trimmed.StartsWith("EXPLAIN", StringComparison.OrdinalIgnoreCase))
-                return "[SQL] 只支持 SELECT / WITH / PRAGMA / EXPLAIN 查询语句。写操作需要审批。";
+                return "[SQL] 只支持 SELECT / WITH / EXPLAIN 查询语句。写操作需要审批。PRAGMA 已禁用。";
 
-            await using var conn = CreateConnection(provider, connectionString);
+            await using var conn = CreateConnection(providerLower, connectionString);
             await conn.OpenAsync(ct).ConfigureAwait(false);
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = sql;
@@ -136,25 +154,34 @@ public sealed class DatabaseTools
 
     private static string? ExtractHost(string connStr)
     {
-        // Simple extraction for common connection string patterns
+        // Connection string parsers (Npgsql, MySqlConnector, SqlClient) use LAST occurrence.
+        string? result = null;
         foreach (var keyword in new[] { "Host=", "Server=", "Data Source=", "DataSource=" })
         {
-            var idx = connStr.IndexOf(keyword, StringComparison.OrdinalIgnoreCase);
+            var idx = connStr.LastIndexOf(keyword, StringComparison.OrdinalIgnoreCase);
             if (idx < 0) continue;
             var start = idx + keyword.Length;
             var end = connStr.IndexOfAny([';', ' ', ','], start);
             var val = end > start ? connStr[start..end] : connStr[start..];
-            return val.Trim('\'', '"');
+            result = val.Trim('\'', '"');
         }
-        return null;
+        return result;
     }
 
-    private static bool IsLocalhost(string host)
+    private static bool IsLocalConnection(string host)
     {
         return string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
             || string.Equals(host, "127.0.0.1")
             || string.Equals(host, "::1")
+            || string.Equals(host, "[::1]")
+            || string.Equals(host, "0:0:0:0:0:0:0:1")
             || string.Equals(host, ".")
-            || string.Equals(host, "(local)");
+            || string.Equals(host, "(local)")
+            || host.StartsWith("(localdb)", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, "host.docker.internal", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, "gateway.docker.internal", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".svc.cluster.local", StringComparison.OrdinalIgnoreCase)
+            || host.StartsWith("np:", StringComparison.OrdinalIgnoreCase)
+            || host.StartsWith("lpc:", StringComparison.OrdinalIgnoreCase);
     }
 }

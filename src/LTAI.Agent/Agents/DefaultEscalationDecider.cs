@@ -21,13 +21,6 @@ public class DefaultEscalationDecider : IEscalationDecider
         _shouldEscalateSupportThreshold = cfg.ShouldEscalateSupportThreshold;
         _shouldEscalateStepsThreshold = cfg.ShouldEscalateStepsThreshold;
     }
-    private readonly QueryClassifier? _queryClassifier;
-
-    public DefaultEscalationDecider(QueryClassifier? queryClassifier = null)
-    {
-        _queryClassifier = queryClassifier;
-    }
-
     private static readonly HashSet<string> ToolRequiredKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
         "search", "查找", "find", "lookup", "查询", "计算",
@@ -82,7 +75,7 @@ public class DefaultEscalationDecider : IEscalationDecider
         var trimmed = message.Trim();
 
         // Fast path: delegate to unified QueryClassifier
-        if (_queryClassifier != null && _queryClassifier.IsGreetingOnly(trimmed))
+        if (QueryClassifier.IsGreetingOnlyStatic(trimmed))
             return true;
 
         // Fast path: very short messages without tool keywords
@@ -92,7 +85,7 @@ public class DefaultEscalationDecider : IEscalationDecider
         // Mixed query detection: greeting-like prefix + tool keyword = NOT simple
         if (trimmed.Length > 20)
         {
-            var hasGreeting = _queryClassifier?.IsGreetingOnly(trimmed[..Math.Min(20, trimmed.Length)]) ?? false;
+            var hasGreeting = QueryClassifier.IsGreetingOnlyStatic(trimmed[..Math.Min(20, trimmed.Length)]);
             var hasToolKeyword = ToolRequiredKeywords.Any(k => trimmed.Contains(k, StringComparison.OrdinalIgnoreCase));
             if (hasGreeting && hasToolKeyword)
                 return false;

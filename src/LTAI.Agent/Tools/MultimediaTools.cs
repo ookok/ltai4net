@@ -148,7 +148,7 @@ public sealed class MultimediaTools
         {
             var fi = new FileInfo(fp);
             var (code, stdout, stderr) = await RunProcessAsync("ffprobe",
-                $"-v quiet -print_format json -show_format -show_streams \"{fp}\"").ConfigureAwait(false);
+                $"-v quiet -print_format json -show_format -show_streams {EscapePath(fp)}").ConfigureAwait(false);
             if (code != 0) return "FFprobe not available. Install FFmpeg.\n" + stderr;
 
             using var doc = System.Text.Json.JsonDocument.Parse(stdout);
@@ -198,7 +198,7 @@ public sealed class MultimediaTools
         var outPath = Path.ChangeExtension(fp, ext);
         try
         {
-            var (code, _, stderr) = await RunProcessAsync("ffmpeg", $"-i \"{fp}\" -y -vn \"{outPath}\"", 120).ConfigureAwait(false);
+            var (code, _, stderr) = await RunProcessAsync("ffmpeg", $"-i {EscapePath(fp)} -y -vn {EscapePath(outPath)}", 120).ConfigureAwait(false);
             if (code != 0) return "FFmpeg failed:\n" + stderr;
 
             var fi = new FileInfo(outPath);
@@ -234,10 +234,10 @@ public sealed class MultimediaTools
             }
             else
             {
-                var (c1, _, _) = await RunProcessAsync("import", $"-window root \"{outPath}\"", 10).ConfigureAwait(false);
+                var (c1, _, _) = await RunProcessAsync("import", $"-window root {EscapePath(outPath)}", 10).ConfigureAwait(false);
                 if (c1 != 0)
                 {
-                    var (c2, _, _) = await RunProcessAsync("scrot", $"\"{outPath}\"", 10).ConfigureAwait(false);
+                    var (c2, _, _) = await RunProcessAsync("scrot", EscapePath(outPath), 10).ConfigureAwait(false);
                     if (c2 != 0) return "Screenshot failed. Install ImageMagick or scrot.";
                 }
             }
@@ -274,6 +274,16 @@ public sealed class MultimediaTools
         try { await proc.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) { proc.Kill(entireProcessTree: true); return (-1, "", "Timed out"); }
         return (proc.ExitCode, stdout, stderr);
+    }
+
+    /// <summary>Escape a file path for use in process arguments (defense-in-depth).</summary>
+    private static string EscapePath(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return path.Contains(' ') ? $"\"{path}\"" : path;
+        return ShellSecurity.EscapeBashArg(path).Contains(' ')
+            ? $"\"{ShellSecurity.EscapeBashArg(path)}\""
+            : ShellSecurity.EscapeBashArg(path);
     }
 
     private static string FormatSize(long bytes) => bytes switch

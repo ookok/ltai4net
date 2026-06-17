@@ -92,7 +92,7 @@ public class ChatController : ControllerBase
                 .ConfigureAwait(false))
             {
                 if (update.Text == null) continue;
-                renderer.OnTextDelta(update.Text);
+                await renderer.OnTextDelta(update.Text).ConfigureAwait(false);
             }
             await renderer.WriteDoneAsync().ConfigureAwait(false);
         }

@@ -76,12 +76,14 @@ public static class Program
         Log("InitializeServicesAsync started");
         var services = BuildServiceCollection();
 
-        // ⏱ 全局超时：DI 容器 + WarmUp 共 18 秒内必须完成
+        // ⏱ 全局超时: 可配置 (LTAI_INIT_TIMEOUT_SEC, 默认 30s)
         // 防止 ONNX 模型加载、EP 探测、或网络请求卡死初始化
-        using var initCts = new CancellationTokenSource(TimeSpan.FromSeconds(18));
+        var initTimeoutSec = int.TryParse(
+            Environment.GetEnvironmentVariable("LTAI_INIT_TIMEOUT_SEC"), out var t) ? Math.Max(10, t) : 30;
+        using var initCts = new CancellationTokenSource(TimeSpan.FromSeconds(initTimeoutSec));
         var ct = initCts.Token;
 
-        Log("Building ServiceProvider...");
+        Log($"Building ServiceProvider (timeout: {initTimeoutSec}s)...");
         var provider = await Task.Run(() => services.BuildServiceProvider(), ct);
         Log("ServiceProvider built");
 
@@ -92,7 +94,8 @@ public static class Program
 
         var chatAgent = provider.GetRequiredService<ChatAgent>();
         Log("ChatAgent resolved, warming up...");
-        await chatAgent.WarmUpAsync().WaitAsync(TimeSpan.FromSeconds(6)).ConfigureAwait(false);
+        var warmupTimeout = Math.Max(10, initTimeoutSec / 2);
+        await chatAgent.WarmUpAsync().WaitAsync(TimeSpan.FromSeconds(warmupTimeout)).ConfigureAwait(false);
         Log("WarmUp complete");
 
         App.ChatAgent = chatAgent;

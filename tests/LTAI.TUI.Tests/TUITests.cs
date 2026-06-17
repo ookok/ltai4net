@@ -1,6 +1,12 @@
+using LTAI.TUI;
 using LTAI.TUI.Rendering;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Spectre.Console;
 using Spectre.Console.Rendering;
+using Terminal.Gui.App;
+using Terminal.Gui.Drivers;
 
 namespace LTAI.TUI.Tests;
 
@@ -161,15 +167,112 @@ public sealed class FramebufferRendererTests
         var ex = Record.Exception(() => renderer.RenderAndFlush(markup));
         Assert.Null(ex);
     }
+
+    [Fact]
+    public void RenderAndFlush_UnicodeText_DoesNotThrow()
+    {
+        using var renderer = new FramebufferRenderer();
+        var markup = new Markup("你好世界 γεια σας");
+        var ex = Record.Exception(() => renderer.RenderAndFlush(markup));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void RenderAndFlush_LongLine_TruncatesAtWidth()
+    {
+        using var renderer = new FramebufferRenderer();
+        var longText = new string('x', 500);
+        var markup = new Markup(longText);
+        var ex = Record.Exception(() => renderer.RenderAndFlush(markup));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void RenderAndFlush_Table_DoesNotThrow()
+    {
+        using var renderer = new FramebufferRenderer();
+        var table = new Table()
+            .AddColumn("A")
+            .AddColumn("B")
+            .AddRow("1", "2")
+            .AddRow("3", "4");
+        var ex = Record.Exception(() => renderer.RenderAndFlush(table));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void RenderAndFlush_Panel_DoesNotThrow()
+    {
+        using var renderer = new FramebufferRenderer();
+        var panel = new Panel(new Markup("content"))
+        {
+            Header = new PanelHeader("Title"),
+            Border = BoxBorder.Rounded
+        };
+        var ex = Record.Exception(() => renderer.RenderAndFlush(panel));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void RenderAndFlush_ConsecutiveCalls_DoesNotThrow()
+    {
+        using var renderer = new FramebufferRenderer();
+        for (int i = 0; i < 5; i++)
+        {
+            var markup = new Markup($"iteration {i}");
+            var ex = Record.Exception(() => renderer.RenderAndFlush(markup));
+            Assert.Null(ex);
+        }
+    }
+
+    [Fact]
+    public void RenderAndFlush_ControlChars_DoesNotThrow()
+    {
+        using var renderer = new FramebufferRenderer();
+        var markup = new Markup("line1\n\tindented\nline3");
+        var ex = Record.Exception(() => renderer.RenderAndFlush(markup));
+        Assert.Null(ex);
+    }
 }
 
-public sealed class MainWindowSmokeTests
+public sealed class MainWindowLifecycleTests : IDisposable
 {
+    private IApplication? _app;
+
     [Fact]
-    public void MainWindow_Type_IsPublic()
+    public void ApplicationLifecycle_CreateInitDispose_DoesNotThrow()
     {
-        var t = typeof(MainWindow);
-        Assert.True(t.IsPublic);
-        Assert.True(t.IsSealed);
+        var ex = Record.Exception(() =>
+        {
+            using var app = Application.Create().Init(DriverRegistry.Names.ANSI);
+            Assert.True(app.Initialized);
+        });
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void ApplicationLifecycle_Init_ReturnsSelf()
+    {
+        using var app = Application.Create().Init(DriverRegistry.Names.ANSI);
+        Assert.NotNull(app);
+        Assert.True(app.Initialized);
+    }
+
+    [Fact]
+    public void MainWindow_Constructor_DoesNotThrow()
+    {
+        using var app = Application.Create().Init(DriverRegistry.Names.ANSI);
+        _app = app;
+
+        var sp = new ServiceCollection().BuildServiceProvider();
+        var logger = NullLogger<MainWindow>.Instance;
+        var window = new MainWindow(app, null!, null!, logger, "test-model", sp);
+        Assert.NotNull(window);
+        Assert.Equal("LTAI", window.Title);
+    }
+
+    public void Dispose()
+    {
+        _app?.Dispose();
     }
 }

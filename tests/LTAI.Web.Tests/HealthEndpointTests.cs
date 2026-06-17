@@ -1,235 +1,126 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.TestHost;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using LTAI.Core.Configuration;
-using LTAI.Core;
-using LTAI.AI;
-using LTAI.Agent;
+using System.Text.Json;
 
 namespace LTAI.Web.Tests;
 
-public sealed class HealthEndpointTests
+public sealed class HealthEndpointTests : IClassFixture<WebTestsFactory>
 {
-    private static TestServer CreateServer(bool development = false)
+    private readonly HttpClient _client;
+
+    public HealthEndpointTests(WebTestsFactory factory)
     {
-        var builder = new WebHostBuilder()
-            .ConfigureAppConfiguration(cfg =>
-            {
-                cfg.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["LTAI:AI:MaxTokens"] = "4096",
-                    ["LTAI:AI:Temperature"] = "0.7",
-                    ["LTAI:Web:Port"] = "5100",
-                    ["LTAI:DataDirectory"] = ".livingtree-test",
-                });
-            })
-            .ConfigureServices(services =>
-            {
-                services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
-                services.AddLTAICore(enableOpenTelemetry: false);
-                services.AddLTAIAI();
-                services.AddLTAIAgent();
-            })
-            .Configure(app =>
-            {
-                app.UseRouting();
-                app.UseEndpoints(e =>
-                {
-                    e.MapGet("/health", (HttpContext ctx) =>
-                {
-                    ctx.Response.StatusCode = 200;
-                    ctx.Response.ContentType = "application/json";
-                    return ctx.Response.Body.WriteAsync(Encoding.UTF8.GetBytes("""{"status":"healthy","kgstore":true,"session_store":true,"llm_providers":"ok"}"""));
-                });
-                e.MapGet("/ready", (HttpContext ctx) =>
-                {
-                    ctx.Response.StatusCode = 200;
-                    return ctx.Response.Body.WriteAsync(Encoding.UTF8.GetBytes("""{"ready":true}"""));
-                });
-                });
-            });
-
-        if (development)
-            builder.UseEnvironment("Development");
-
-        return new TestServer(builder);
+        _client = factory.Client;
     }
 
     [Fact]
     public async Task Health_Returns200()
     {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var resp = await client.GetAsync("/health");
+        var resp = await _client.GetAsync("/health");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        var body = await resp.Content.ReadAsStringAsync();
-        Assert.Contains("healthy", body);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("healthy", body.GetProperty("status").GetString());
     }
 
     [Fact]
     public async Task Ready_Returns200()
     {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var resp = await client.GetAsync("/ready");
+        var resp = await _client.GetAsync("/ready");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(body.GetProperty("ready").GetBoolean());
     }
 
     [Fact]
     public async Task Classify_WithoutDevelopment_Returns404()
     {
-        using var server = CreateServer(development: false);
-        var client = server.CreateClient();
-        var resp = await client.GetAsync("/ltai/v1/classify?query=hello");
-        // Only registered in IsDevelopment() — returns 404 otherwise
+        // Test stub endpoints don't register /ltai/v1/classify
+        var resp = await _client.GetAsync("/ltai/v1/classify?query=hello");
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
 
     [Fact]
     public async Task Entities_ReturnsAgentList()
     {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        // /ltai/v1/entities is registered via the real Program.cs minimal API
-        var resp = await client.GetAsync("/ltai/v1/entities");
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound,
-            $"Expected 200 or 404, got {(int)resp.StatusCode}");
-    }
-
-    [Fact]
-    public async Task Jobs_ReturnsSnapshot()
-    {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var resp = await client.GetAsync("/ltai/v1/jobs");
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound,
-            $"Expected 200 or 404, got {(int)resp.StatusCode}");
-    }
-
-    [Fact]
-    public async Task Workflows_ReturnsList()
-    {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var resp = await client.GetAsync("/ltai/v1/workflows");
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound,
-            $"Expected 200 or 404, got {(int)resp.StatusCode}");
+        var resp = await _client.GetAsync("/ltai/v1/entities");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(body.TryGetProperty("count", out var count) && count.GetInt32() > 0);
+        Assert.True(body.TryGetProperty("items", out _));
     }
 
     [Fact]
     public async Task Todos_ReturnsData()
     {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var resp = await client.GetAsync("/ltai/v1/todos");
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound,
-            $"Expected 200 or 404, got {(int)resp.StatusCode}");
+        var resp = await _client.GetAsync("/ltai/v1/todos");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
     }
 
     [Fact]
     public async Task Mode_ReturnsCurrentMode()
     {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var resp = await client.GetAsync("/ltai/v1/mode");
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound,
-            $"Expected 200 or 404, got {(int)resp.StatusCode}");
+        var resp = await _client.GetAsync("/ltai/v1/mode");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
     }
 
     [Fact]
     public async Task Pipelines_ReturnsList()
     {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var resp = await client.GetAsync("/ltai/v1/pipelines");
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound,
-            $"Expected 200 or 404, got {(int)resp.StatusCode}");
+        var resp = await _client.GetAsync("/ltai/v1/pipelines");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
     }
 
     [Fact]
-    public async Task Audit_ReturnsFindings()
+    public async Task Workflows_ReturnsList()
     {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var resp = await client.GetAsync("/ltai/v1/audit");
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound,
-            $"Expected 200 or 404, got {(int)resp.StatusCode}");
+        var resp = await _client.GetAsync("/ltai/v1/workflows");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
     }
 
     [Fact]
     public async Task WorkflowReload_ReturnsOk()
     {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var resp = await client.PostAsync("/ltai/v1/workflows/reload", null);
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound,
-            $"Expected 200 or 404, got {(int)resp.StatusCode}");
+        var resp = await _client.PostAsync("/ltai/v1/workflows/reload", null);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
     }
 
     [Fact]
-    public async Task AuditSave_Post_ReturnsOk()
+    public async Task Jobs_ReturnsSnapshot()
     {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var content = JsonContent.Create(new
-        {
-            findings = new[]
-            {
-                new { Severity = "P0", File = "test.cs", Line = "1", Category = "security", Description = "test" }
-            }
-        });
-        var resp = await client.PostAsync("/ltai/v1/audit/save", content);
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound || resp.StatusCode == HttpStatusCode.BadRequest,
-            $"Got {(int)resp.StatusCode}");
+        var resp = await _client.GetAsync("/ltai/v1/jobs");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Audit_ReturnsFindings()
+    {
+        var resp = await _client.GetAsync("/ltai/v1/audit");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(body.TryGetProperty("total", out _));
+        Assert.True(body.TryGetProperty("findings", out _));
     }
 
     [Fact]
     public async Task AuditStats_ReturnsOk()
     {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var resp = await client.GetAsync("/ltai/v1/audit/stats");
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound,
-            $"Got {(int)resp.StatusCode}");
+        var resp = await _client.GetAsync("/ltai/v1/audit/stats");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
     }
 
     [Fact]
-    public async Task ChatPost_ReturnsReply()
+    public async Task AuditSave_Post_ReturnsOk()
     {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var content = JsonContent.Create(new { Message = "hello", UserId = "test" });
-        var resp = await client.PostAsync("/api/chat", content);
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound || resp.StatusCode == HttpStatusCode.InternalServerError,
-            $"Got {(int)resp.StatusCode}");
-    }
-
-    [Fact]
-    public async Task ChatStream_ReturnsSSE()
-    {
-        using var server = CreateServer();
-        var client = server.CreateClient();
-        var resp = await client.GetAsync("/api/chat/stream?message=hello");
-        Assert.True(
-            resp.StatusCode == HttpStatusCode.OK || resp.StatusCode == HttpStatusCode.NotFound || resp.StatusCode == HttpStatusCode.InternalServerError,
-            $"Got {(int)resp.StatusCode}");
+        var content = JsonContent.Create(new
+        {
+            findings = new[]
+            {
+                new { Severity = "P0", File = "test.cs", Line = "1", Category = "security", Description = "test finding" }
+            }
+        });
+        var resp = await _client.PostAsync("/ltai/v1/audit/save", content);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(body.GetProperty("persisted").GetInt32() >= 1);
     }
 }

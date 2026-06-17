@@ -61,9 +61,10 @@ public static class CryptoTools
             var nonce = RandomNumberGenerator.GetBytes(12);
             var ciphertext = new byte[data.Length];
             var tag = new byte[16];
+            var aad = GetAssociatedData(outputPath);
 
                     using var aes = new AesGcm(key, 16);
-            aes.Encrypt(nonce, data, ciphertext, tag);
+            aes.Encrypt(nonce, data, ciphertext, tag, aad);
 
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
             using var outStream = File.Create(outputPath);
@@ -101,9 +102,10 @@ public static class CryptoTools
 
             var key = DeriveKey(password, salt, 32);
             var plaintext = new byte[ciphertext.Length];
+            var aad = GetAssociatedData(outputPath);
 
                     using var aes = new AesGcm(key, 16);
-            aes.Decrypt(nonce, ciphertext, tag, plaintext);
+            aes.Decrypt(nonce, ciphertext, tag, plaintext, aad);
 
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
             File.WriteAllBytes(outputPath, plaintext);
@@ -153,5 +155,10 @@ public static class CryptoTools
     private static byte[] DeriveKey(string password, byte[] salt, int keySize)
     {
         return Rfc2898DeriveBytes.Pbkdf2(password, salt, 100000, HashAlgorithmName.SHA256, keySize);
+    }
+
+    private static byte[] GetAssociatedData(string filePath)
+    {
+        return Encoding.UTF8.GetBytes(Path.GetFileNameWithoutExtension(filePath) ?? "ltai-encrypt");
     }
 }

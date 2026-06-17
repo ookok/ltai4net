@@ -8,6 +8,7 @@ namespace LTAI.Tests;
 /// 需要 models/minilm-l6-v2/model.onnx 文件存在。
 /// 可用 dotnet test --filter "EmbeddingIntegration" 单独运行。
 /// </summary>
+[Trait("Category", "Integration")]
 public class EmbeddingIntegrationTests
 {
     /// <summary>

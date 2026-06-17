@@ -11,7 +11,7 @@ public sealed class MoAWorkflow
     private readonly ILogger<MoAWorkflow> _logger;
     private static readonly int _moaConcurrency = int.TryParse(
         Environment.GetEnvironmentVariable("LTAI_MOA_CONCURRENCY"), out var c) ? Math.Max(1, c) : 6;
-    private static readonly SemaphoreSlim _throttle = new(_moaConcurrency, _moaConcurrency);
+    private readonly SemaphoreSlim _throttle = new(_moaConcurrency, _moaConcurrency);
     private readonly TimeSpan _workflowTimeout;
 
     public MoAWorkflow(

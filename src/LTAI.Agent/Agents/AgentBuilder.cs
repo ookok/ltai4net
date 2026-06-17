@@ -202,7 +202,7 @@ internal static partial class AgentBuilder
             .Build();
 
         // ── Plan mode 特殊处理 ──
-        var isPlanMode = name == "LTAI-Plan";
+        var isPlanMode = name == AgentNames.Plan;
         if (isPlanMode)
         {
             tools = new ToolSet();
@@ -230,7 +230,6 @@ internal static partial class AgentBuilder
         var identityText = ResolveIdentity(opts);
 
         RegisterMemoryTools(tools, canWrite, palaceStore, ws, yamlTools);
-        RegisterReviewTools(tools, name, ws, palaceStore, sp, guardedLlm);
 
         // MCP (Model Context Protocol) client tools: lazy-loaded on first invocation.
         if (!isPlanMode)
@@ -250,9 +249,9 @@ internal static partial class AgentBuilder
         // ToolSet guarantees uniqueness at insertion time (case-insensitive name key).
         var toolList = tools.ToList();
 
-        // ParallelReview — needs full tool list for subagent tool filtering; registered last
+        // Review & ParallelReview — registered last once toolList is complete
         if (!isPlanMode)
-            RegisterParallelReviewTool(tools, name, ws, palaceStore, sp, guardedLlm, toolList);
+            RegisterReviewTools(tools, name, ws, palaceStore, sp, guardedLlm, toolList);
 
         // P2: Register tools in the central AgentToolStore (MAF-aligned tool discovery).
         sp.GetService<AgentToolStore>()?.RegisterRange(name, toolList);

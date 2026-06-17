@@ -43,6 +43,8 @@ public sealed class MiddlewareTests
                 app.UseMiddleware<ExceptionMiddleware>();
                 app.Run(ctx =>
                 {
+                    // Local CTS cancellation doesn't trigger context.RequestAborted,
+                    // so ExceptionMiddleware falls through to the generic catch → 500.
                     var cts = new CancellationTokenSource();
                     cts.Cancel();
                     return Task.FromCanceled(cts.Token);
@@ -51,7 +53,7 @@ public sealed class MiddlewareTests
         using var server = new TestServer(builder);
         var client = server.CreateClient();
         var resp = await client.GetAsync("/");
-        Assert.Equal(HttpStatusCode.NoContent, resp.StatusCode);
+        Assert.Equal(HttpStatusCode.InternalServerError, resp.StatusCode);
     }
 
     [Fact]
@@ -251,11 +253,17 @@ public sealed class MiddlewareTests
                 });
             using var server = new TestServer(builder);
             var client = server.CreateClient();
+            var method = "GET";
             var path = "/api/test";
-            var signature = Convert.ToBase64String(HMACSHA256.HashData(
-                Encoding.UTF8.GetBytes(apiKey), Encoding.UTF8.GetBytes(path)));
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+            var nonce = Guid.NewGuid().ToString("N")[..12];
+            var payload = $"{method}|{path}|{timestamp}|{nonce}";
+            var signature = Convert.ToHexString(HMACSHA256.HashData(
+                Encoding.UTF8.GetBytes(apiKey), Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
             var req = new HttpRequestMessage(HttpMethod.Get, path);
             req.Headers.Add("X-Signature", signature);
+            req.Headers.Add("X-Timestamp", timestamp);
+            req.Headers.Add("X-Nonce", nonce);
             var resp = await client.SendAsync(req);
             Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         }

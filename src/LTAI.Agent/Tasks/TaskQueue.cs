@@ -52,6 +52,8 @@ public sealed record TaskItem
     public double? Progress { get; set; }
     public string? ProgressMessage { get; set; }
     public TaskPriority Priority { get; init; } = TaskPriority.Normal;
+    /// <summary>Signaled when status changes to Completed/Failed/Cancelled.</summary>
+    internal TaskCompletionSource CompletionSignal { get; } = new();
 }
 
 public interface ITaskStore
@@ -219,15 +221,33 @@ public sealed class TaskQueue : IAsyncDisposable
 
     public async Task<string?> WaitAsync(string id, TimeSpan? timeout = null, CancellationToken ct = default)
     {
-        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromMinutes(10));
-        while (DateTimeOffset.UtcNow < deadline)
+        if (!_items.TryGetValue(id, out var item))
+            return null;
+
+        // Fast path: already completed
+        if (item.Status is TaskStatus.Completed or TaskStatus.Failed or TaskStatus.Cancelled)
+            return item.Result ?? item.Error;
+
+        // Wait on completion signal
+        using var timeoutCts = timeout.HasValue
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : null;
+        if (timeoutCts != null && timeout.HasValue)
+            timeoutCts.CancelAfter(timeout.GetValueOrDefault());
+        try
         {
-            if (_items.TryGetValue(id, out var item)
-                && item.Status is TaskStatus.Completed or TaskStatus.Failed or TaskStatus.Cancelled)
-                return item.Result ?? item.Error;
-            await Task.Delay(200, ct).ConfigureAwait(false);
+            await item.CompletionSignal.Task.WaitAsync(timeoutCts?.Token ?? ct).ConfigureAwait(false);
         }
-        return null;
+        catch (TimeoutException)
+        {
+            return null;
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+
+        return item.Result ?? item.Error;
     }
 
     private async Task ConsumerLoopAsync(CancellationToken ct)
@@ -276,6 +296,7 @@ public sealed class TaskQueue : IAsyncDisposable
                 ? await item.Work(linkedCt).ConfigureAwait(false)
                 : "(no work delegate)";
             item.Status = TaskStatus.Completed;
+            item.CompletionSignal.TrySetResult();
             Interlocked.Increment(ref _completedCount);
             _logger?.LogInformation("TaskQueue: completed {Id} '{Name}'", item.Id, item.Name);
         }
@@ -283,6 +304,7 @@ public sealed class TaskQueue : IAsyncDisposable
         {
             var isTimeout = timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested;
             item.Status = isTimeout ? TaskStatus.Failed : TaskStatus.Cancelled;
+            item.CompletionSignal.TrySetResult();
             item.Error = isTimeout ? $"timeout ({_defaultTaskTimeout})" : "cancelled";
             if (isTimeout) Interlocked.Increment(ref _failedCount);
             else Interlocked.Increment(ref _cancelledCount);
@@ -303,6 +325,7 @@ public sealed class TaskQueue : IAsyncDisposable
             }
 
             item.Status = TaskStatus.Failed;
+            item.CompletionSignal.TrySetResult();
             item.Error = ex.Message;
             Interlocked.Increment(ref _failedCount);
             _deadLetterQueue.Enqueue(item); // preserve for inspection/replay

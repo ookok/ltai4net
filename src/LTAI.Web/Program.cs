@@ -8,7 +8,6 @@ using LTAI.Core.Configuration;
 using LTAI.Core.Session;
 using LTAI.Web.Middleware;
 using Microsoft.Agents.AI;
-using Microsoft.Agents.AI.DevUI;
 using Microsoft.Agents.AI.Hosting;
 using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
 using Microsoft.Data.Sqlite;
@@ -69,16 +68,6 @@ try
     // ── OpenAPI metadata ──
     // Swashbuckle 9.0.6 has TypeLoadException on .NET 10 preview; use Minimal API OpenAPI metadata only.
     builder.Services.AddOpenApi();
-
-    // ── P7.1: MAF DevUI (development-only) ──
-    // Auto-discovers all 18 agents registered via MAF keyed services.
-    // Exposes /devui for browser-based agent playground (chat, history, tool inspection).
-    // Loopback-only by default (DevUIAuthFilter rejects non-127.0.0.1 callers).
-    // See D14: not exposed in production — system-prompt disclosure risk.
-    if (builder.Environment.IsDevelopment())
-    {
-        builder.AddDevUI();
-    }
 
     // ── P7.2: OTel exporters ──
     // LTAI.Core already wires tracing sources (LTAI.* + Microsoft.Agents.AI.*) and
@@ -167,7 +156,10 @@ try
     // These complement MAF's /v1/entities (DevUI auto-discovery) by adding
     // LTAI-specific fields (model, temperature, tools, permissions).
     app.MapGet("/ltai/v1/entities", (LTAI.Agent.DevUI.LTAIDevUIService devUi) =>
-        devUi.ListAgentCards());
+    {
+        var items = devUi.ListAgentCards();
+        return Results.Ok(new { count = items.Count, items });
+    });
     app.MapGet("/ltai/v1/entities/{name}/card", (LTAI.Agent.DevUI.LTAIDevUIService devUi, string name) =>
     {
         var card = devUi.GetAgentCard(name);
@@ -308,11 +300,26 @@ try
             // Stream events until the client disconnects.
             await foreach (var sse in channel.Reader.ReadAllAsync(ctx.RequestAborted).ConfigureAwait(false))
             {
-                await ctx.Response.WriteAsync(sse, ctx.RequestAborted).ConfigureAwait(false);
-                await ctx.Response.Body.FlushAsync(ctx.RequestAborted).ConfigureAwait(false);
+                try
+                {
+                    await ctx.Response.WriteAsync(sse, ctx.RequestAborted).ConfigureAwait(false);
+                    await ctx.Response.Body.FlushAsync(ctx.RequestAborted).ConfigureAwait(false);
+                }
+                catch (IOException ex)
+                {
+                    logger.LogWarning(ex, "SSE client disconnected during write");
+                    break;
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
         }
-        catch (OperationCanceledException) { /* client disconnected */ }
+        catch (OperationCanceledException)
+        {
+            // client disconnected
+        }
         finally
         {
             keepaliveCts.Cancel();
@@ -440,7 +447,8 @@ try
         PalaceStore store,
         string? statusFilter, string? severity, string? fileFilter,
         string? category, string? fromDate, string? toDate,
-        int limit = 500, bool includeFixed = false) =>
+        int limit = 500, bool includeFixed = false,
+        CancellationToken ct = default) =>
     {
         var max = Math.Clamp(limit > 0 ? limit : 500, 1, 2000);
         var drawers = await store.SearchByWingAsync("audit", maxCount: max);
@@ -453,6 +461,7 @@ try
         var filtered = new List<object>();
         foreach (var d in drawers)
         {
+            ct.ThrowIfCancellationRequested();
             var st = "open"; string? sev = null, file = null, line = null, cat = null;
             if (d.Metadata != null)
             {
@@ -489,9 +498,9 @@ try
         return Results.Ok(new { total = filtered.Count, findings = filtered });
     });
 
-    app.MapGet("/ltai/v1/audit/{id}", async (PalaceStore store, string id) =>
+    app.MapGet("/ltai/v1/audit/{id}", async (PalaceStore store, string id, int limit = 2000) =>
     {
-        var drawers = await store.SearchByWingAsync("audit", maxCount: 2000);
+        var drawers = await store.SearchByWingAsync("audit", maxCount: Math.Clamp(limit, 1, 2000));
         var match = drawers.FirstOrDefault(d =>
             d.DrawerId.StartsWith(id, StringComparison.OrdinalIgnoreCase));
         if (match == null) return Results.NotFound(new { error = $"Finding '{id}' not found" });
@@ -548,9 +557,10 @@ try
     app.MapGet("/ltai/v1/audit/export", async (
         PalaceStore store, string format = "json",
         string? statusFilter = null, string? severity = null, string? category = null,
-        bool includeAll = false) =>
+        bool includeAll = false, int limit = 2000,
+        CancellationToken ct = default) =>
     {
-        var drawers = await store.SearchByWingAsync("audit", maxCount: 2000);
+        var drawers = await store.SearchByWingAsync("audit", maxCount: Math.Clamp(limit, 1, 2000));
         var statusSet = !string.IsNullOrEmpty(statusFilter)
             ? statusFilter.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet()
             : null;
@@ -558,6 +568,7 @@ try
         var records = new List<Dictionary<string, string?>>();
         foreach (var d in drawers)
         {
+            ct.ThrowIfCancellationRequested();
             var st = "open"; string? sev = null, file = null, line = null, cat = null;
             if (d.Metadata != null)
             {
@@ -619,9 +630,10 @@ try
     });
 
     app.MapGet("/ltai/v1/audit/stats", async (PalaceStore store,
-        string? severity = null, string? category = null) =>
+        string? severity = null, string? category = null, int limit = 2000,
+        CancellationToken ct = default) =>
     {
-        var drawers = await store.SearchByWingAsync("audit", maxCount: 2000);
+        var drawers = await store.SearchByWingAsync("audit", maxCount: Math.Clamp(limit, 1, 2000));
         var statusCounts = new Dictionary<string, int>();
         var sevCounts = new Dictionary<string, int>();
         var catCounts = new Dictionary<string, int>();
@@ -629,6 +641,7 @@ try
 
         foreach (var d in drawers)
         {
+            ct.ThrowIfCancellationRequested();
             var st = "open"; string sev = "?"; string cat = "?"; string file = "?";
             if (d.Metadata != null)
             {
@@ -713,12 +726,6 @@ try
             return Results.Problem(ex.Message);
         }
     });
-
-    // ── P7.1: Map DevUI endpoint (Development-only) ──
-    if (app.Environment.IsDevelopment())
-    {
-        app.MapDevUI();
-    }
 
     // ── Readiness Probe (lightweight — just checks KG SQLite) ──
     app.MapGet("/ready", async (IServiceProvider sp) =>

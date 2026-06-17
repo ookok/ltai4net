@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using TreeSitter;
 
@@ -10,7 +11,7 @@ namespace LTAI.Agent.CodeAnalysis;
 public sealed class TreeSitterParser : IDisposable
 {
     private readonly Parser _parser;
-    private readonly Dictionary<string, Language> _languages = new();
+    private readonly ConcurrentDictionary<string, Language> _languages = new();
     private readonly ILogger? _logger;
 
     // Language name → (native DLL, native function)
@@ -209,9 +210,7 @@ public sealed class TreeSitterParser : IDisposable
 
         try
         {
-            lang = new Language(spec.dll, spec.fn);
-            _languages[langId] = lang;
-            return lang;
+            return _languages.GetOrAdd(langId, _ => new Language(spec.dll, spec.fn));
         }
         catch (Exception ex)
         {
@@ -229,6 +228,7 @@ public sealed class TreeSitterParser : IDisposable
                 // non-critical, best-effort
             }
         }
+        _languages.Clear();
         try { _parser.Dispose(); } catch
         {
             // non-critical, best-effort

@@ -98,10 +98,10 @@ public static class Program
         Console.InputEncoding = System.Text.Encoding.UTF8;
         Console.Title = "LTAI";
 
-        // ── Show splash then immediately start TG ──
+        // ── Show splash ──
         AnsiConsole.Write(new FigletText("LTAI").Color(Color.Green));
         AnsiConsole.MarkupLine("[grey]LivingTree AI — 轻量版[/]");
-        Console.WriteLine(); // one blank line before TG starts
+        AnsiConsole.MarkupLine("[dim]正在启动...[/]");
 
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Warning()
@@ -112,6 +112,7 @@ public static class Program
         var services = new ServiceCollection();
         services.AddLogging(b => { b.ClearProviders(); b.AddSerilog(dispose: true); });
 
+        AnsiConsole.MarkupLine("[dim]正在加载配置...[/]");
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
@@ -119,28 +120,40 @@ public static class Program
 
         services.AddSingleton<IConfigurationRoot>(config);
         services.Configure<LTAIOptions>(config.GetSection(LTAIOptions.SectionName));
+
+        AnsiConsole.MarkupLine("[dim]正在初始化核心服务...[/]");
         services.AddLTAICore();
+
+        AnsiConsole.MarkupLine("[dim]正在初始化 AI 服务...[/]");
         services.AddLTAIAI();
+
+        AnsiConsole.MarkupLine("[dim]正在加载智能体...[/]");
         services.AddLTAIAgent();
 
         ServiceProvider sp;
-        try { sp = services.BuildServiceProvider(); }
+        try
+        {
+            AnsiConsole.MarkupLine("[dim]正在构建服务容器...[/]");
+            sp = services.BuildServiceProvider();
+        }
         catch (Exception ex)
         {
             AnsiConsole.MarkupLine($"[red]初始化失败:[/] {ex.Message.EscapeMarkup()}");
+            AnsiConsole.MarkupLine("[yellow]请检查配置:\n  1. appsettings.json 是否存在\n  2. API Key 是否已配置\n  3. 日志文件: logs/ltai-agent-.log[/]");
             Console.ReadLine(); Environment.Exit(1); return;
         }
 
         var chatAgent = sp.GetRequiredService<ChatAgent>();
 
-        // Background warmup
+        // Background warmup with user-visible retry hint
+        AnsiConsole.MarkupLine("[dim]正在预热模型（后台运行）...[/]");
         _ = Task.Run(async () =>
         {
             try { await chatAgent.WarmUpAsync().ConfigureAwait(false); }
             catch (Exception ex) { Log.Logger.Warning(ex, "WarmUp 失败"); }
         });
 
-        // ── Terminal.Gui FullScreen mode (暂用 FullScreen 验证渲染) ──
+        // ── Terminal.Gui FullScreen mode ──
         Application.AppModel = AppModel.FullScreen;
         var sessionMgr = new SessionManager(new MmSessionSerializer());
         var cacheStore = sp.GetService<LTAI.Agent.Caching.IMemoryCachingStore>();
@@ -156,7 +169,8 @@ public static class Program
         var l1Label = l1 != null && !string.IsNullOrEmpty(l1.Provider)
             ? $"L1: {l1.Provider} / {l1.Model ?? "default"}"
             : "未配置模型 (使用 /model 配置)";
-        using var win = new MainWindow(app, chatAgent, sessionMgr, l1Label, sp);
+        var logger = sp.GetRequiredService<ILogger<MainWindow>>();
+        using var win = new MainWindow(app, chatAgent, sessionMgr, logger, l1Label, sp);
         app.Run(win);
     }
 

@@ -1,12 +1,13 @@
 using LTAI.AI;
 using LTAI.AI.Compaction;
 using LTAI.Agent.Caching;
+using LTAI.Agent.Prompts;
 using LTAI.Agent.Context;
 using LTAI.Agent.Diagnostics;
 using LTAI.Agent.Learning;
 using LTAI.Agent.Memory;
 using LTAI.Agent.Services;
-using LTAI.Agent.Memory;
+using LTAI.Agent.Tasks;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Experts;
 using LTAI.Agent.Experts.Adapters;
@@ -68,6 +69,14 @@ public static class ServiceCollectionExtensions
         // AgentToolStore.GetTools(agentName). This mirrors MAF's keyed AITool DI
         // pattern without requiring IServiceCollection mutations after DI build.
         services.AddSingleton<AgentToolStore>();
+
+        // AgentRegistry — DI singleton for agent definition loading and semantic routing.
+        // Backward-compatible static access preserved via AgentRegistry.X().
+        services.AddSingleton<IAgentRegistry, AgentRegistry>();
+
+        // PromptLoader — DI singleton for prompt file loading with FileSystemWatcher cache.
+        // Backward-compatible static access preserved via PromptLoader.Load().
+        services.AddSingleton<IPromptLoader, PromptLoader>();
 
         // Step 1: Register each agent via MAF AddAIAgent (keyed services).
         // AgentBuilder.BuildAgentImpl still owns the 80+ tool selection, AIContextProviders,
@@ -229,6 +238,10 @@ public static class ServiceCollectionExtensions
         // are batched + persisted; cold-start 0 ONNX calls after first run.
         // P15: pass YAMLWorkflowRegistry so thresholds/candidates are hot-editable.
         services.AddSingleton<RetryChainEmbedder>();
+        services.AddSingleton<RoutingDiagnosticsStore>(sp =>
+            new RoutingDiagnosticsStore(
+                sp.GetRequiredService<IOptions<LTAIOptions>>().Value.DataDirectory,
+                sp.GetRequiredService<ILogger<RoutingDiagnosticsStore>>()));
         services.AddSingleton<DecisionTreeRouter>(sp => new DecisionTreeRouter(
             sp.GetService<EmbeddingClient>(),
             sp.GetRequiredService<ILogger<DecisionTreeRouter>>(),
@@ -242,8 +255,8 @@ public static class ServiceCollectionExtensions
         {
             var all = sp.GetKeyedServices<AIAgent>(KeyedService.AnyKey)
                 .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
-            var routerAgent = all.TryGetValue("LTAI-Router", out var ra) ? ra
-                : throw new InvalidOperationException("LTAI-Router agent not registered");
+            var routerAgent = all.TryGetValue(AgentNames.Router, out var ra) ? ra
+                : throw new InvalidOperationException($"{AgentNames.Router} agent not registered");
             return new AgentWorkflows(all.Values, routerAgent,
                 sp.GetRequiredService<ILogger<AgentWorkflows>>(),
                 sp.GetRequiredService<DecisionTreeRouter>(),
@@ -259,13 +272,46 @@ public static class ServiceCollectionExtensions
         // as an alternative L2 backend. Enable via LTAI:AI:L2:MoA=true in appsettings.json.
         services.AddKeyedSingleton<MoAWorkflow>("moa", (sp, _) =>
         {
-            var l2Client = sp.GetKeyedService<IChatClient>("l2");
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value.AI;
             var proposerCount = Math.Max(1, opts.MoaProposerCount);
             var aggregatorCount = Math.Max(1, opts.MoaAggregatorCount);
-            var proposers = Enumerable.Repeat(l2Client, proposerCount).Where(c => c != null).Cast<IChatClient>().ToList();
-            var aggregators = Enumerable.Repeat(l2Client, aggregatorCount).Where(c => c != null).Cast<IChatClient>().ToList();
-            return new MoAWorkflow(proposers, aggregators, sp.GetRequiredService<ILogger<MoAWorkflow>>(),
+            var logger = sp.GetRequiredService<ILogger<MoAWorkflow>>();
+
+            // Try distinct L2 backends for diverse proposals; fall back to repeating the same client
+            var clientKeys = new[] { "l2", "l2-alt", "l2-extra", "l3" };
+            var proposers = new List<IChatClient>();
+            for (int i = 0; i < proposerCount; i++)
+            {
+                var key = i < clientKeys.Length ? clientKeys[i] : "l2";
+                var client = sp.GetKeyedService<IChatClient>(key);
+                if (client != null) proposers.Add(client);
+            }
+            if (proposers.Count == 0)
+            {
+                var fallback = sp.GetKeyedService<IChatClient>("l2");
+                if (fallback != null)
+                    proposers = Enumerable.Repeat(fallback, proposerCount).ToList()!;
+            }
+
+            var aggregators = new List<IChatClient>();
+            for (int i = 0; i < aggregatorCount; i++)
+            {
+                var key = i < clientKeys.Length ? clientKeys[i] : "l2";
+                var client = sp.GetKeyedService<IChatClient>(key);
+                if (client != null) aggregators.Add(client);
+            }
+            if (aggregators.Count == 0)
+            {
+                var fallback = sp.GetKeyedService<IChatClient>("l2");
+                if (fallback != null)
+                    aggregators = Enumerable.Repeat(fallback, aggregatorCount).ToList()!;
+            }
+
+            if (proposers.Distinct().Count() == 1 && proposerCount > 1)
+                logger.LogWarning("MoA: all proposers use the same IChatClient instance — proposals will not be diverse. " +
+                    "Configure multiple L2 backends (l2/l2-alt/l3) for effective MoA.");
+
+            return new MoAWorkflow(proposers, aggregators, logger,
                 opts.MoaTimeoutSeconds > 0 ? TimeSpan.FromSeconds(opts.MoaTimeoutSeconds) : null);
         });
 
@@ -300,6 +346,73 @@ public static class ServiceCollectionExtensions
         // in Step 1 and AgentRegistry metadata for card construction.
         services.AddSingleton<LTAI.Agent.DevUI.LTAIDevUIService>();
 
+        // Step 3a-j: Memory OS-inspired services
+        // Ground Truth authority provider (injected as AIContextProvider in AgentContextProviderBuilder)
+        // Fallback retriever: 4-level cascade (Hybrid→Dense→FTS→LIKE)
+        services.AddSingleton<LTAI.Agent.Memory.FallbackRetriever>(sp =>
+        {
+            var store = sp.GetRequiredService<LTAI.Agent.Memory.PalaceStore>();
+            var cfg = sp.GetRequiredService<IOptions<LTAIOptions>>().Value.AgentManagement;
+            return new LTAI.Agent.Memory.FallbackRetriever(store, topK: 5);
+        });
+        // Palace feedback tracker: implicit trust scoring via contradictions/interactions
+        services.AddSingleton<LTAI.Agent.Memory.PalaceFeedbackTracker>(sp =>
+        {
+            var store = sp.GetRequiredService<LTAI.Agent.Memory.PalaceStore>();
+            var logger = sp.GetService<ILoggerFactory>()?.CreateLogger<LTAI.Agent.Memory.PalaceFeedbackTracker>();
+            return new LTAI.Agent.Memory.PalaceFeedbackTracker(store, logger);
+        });
+        // Session memory extractor: post-session lightweight extraction (every 5 min)
+        services.AddHostedService<LTAI.Agent.Memory.SessionMemoryExtractor>(sp =>
+        {
+            var store = sp.GetRequiredService<LTAI.Agent.Memory.PalaceStore>();
+            var queue = sp.GetRequiredService<LTAI.Agent.Tasks.TaskQueue>();
+            var logger = sp.GetService<ILoggerFactory>()?.CreateLogger<LTAI.Agent.Memory.SessionMemoryExtractor>();
+            return new LTAI.Agent.Memory.SessionMemoryExtractor(store, queue, logger);
+        });
+
+        // Step 3a-l: ICR-inspired services
+        // QualityGateStep: post-execution quality evaluation (registered via DI for reuse)
+        services.AddSingleton<LTAI.Agent.Pipeline.Steps.QualityGateStep>();
+        // Pipeline steps: registered for DI so PipelineRunner can resolve them
+        services.AddSingleton<LTAI.Agent.Pipeline.Steps.SafetyCheckStep>();
+        services.AddSingleton<LTAI.Agent.Pipeline.Steps.ToolExecutionStep>();
+        services.AddSingleton<LTAI.Agent.Pipeline.Steps.CompactionStep>();
+        services.AddSingleton<LTAI.Agent.Pipeline.Steps.DoDCheckStep>();
+        services.AddSingleton<LTAI.Agent.Pipeline.Steps.RetrospectiveStep>();
+        services.AddSingleton<LTAI.Agent.Pipeline.Steps.GrammarCheckStep>(sp =>
+            new LTAI.Agent.Pipeline.Steps.GrammarCheckStep(
+                logger: sp.GetService<Microsoft.Extensions.Logging.ILogger<LTAI.Agent.Pipeline.Steps.GrammarCheckStep>>(),
+                tsParser: sp.GetService<LTAI.Agent.CodeAnalysis.TreeSitterParser>(),
+                lspManager: sp.GetService<LTAI.Agent.LanguageServer.LspLanguageManager>()));
+        // PipelineRunner: composes all available steps into an ordered execution chain.
+        // Steps are resolved from DI; null-safe (missing steps are skipped).
+        // ChatAgent uses RunPostGenerationAsync for post-agent validation; full
+        // pipeline is available for external consumers (workflows, automation, tests).
+        services.AddSingleton<LTAI.Agent.Pipeline.PipelineRunner>();
+        // SolutionPool: candidate pool for MoA/parallel branches with scoring+selection
+        services.AddSingleton<LTAI.Agent.Orchestration.SolutionPool>();
+        // ActiveContextCompressor: background monitor that checks context ratio every 30s
+        services.AddHostedService<LTAI.Agent.Memory.ActiveContextCompressor>();
+        // HypothesisRouterContext.Factory for creating hypothesis-aware branches
+        services.AddTransient<Func<LTAI.Agent.Context.HypothesisRouterContext>>(_ =>
+            () => LTAI.Agent.Context.HypothesisRouterContext.Create().Add("default").Build());
+
+        // Step 3a-k: Agent Management services (PM-inspired)
+        // WIP manager: limits concurrent reasoning per agent type
+        services.AddSingleton<LTAI.Agent.Concurrency.AgentWIPManager>(sp =>
+        {
+            var cfg = sp.GetRequiredService<IOptions<LTAIOptions>>().Value.AgentManagement;
+            return new LTAI.Agent.Concurrency.AgentWIPManager(cfg.WipLimit, cfg.WipLimitPro);
+        });
+        // Capacity planner: estimates remaining token budget
+        services.AddSingleton<LTAI.Agent.Scheduling.CapacityPlanner>(sp =>
+        {
+            var cfg = sp.GetRequiredService<IOptions<LTAIOptions>>().Value.AgentManagement;
+            return new LTAI.Agent.Scheduling.CapacityPlanner();
+        });
+        // Tiered compressor: priority-aware context compression
+        services.AddSingleton<LTAI.Agent.Context.TieredCompressor>();
         // Step 3b: Token budget tracker (from AI config, optional)
         services.AddSingleton<LTAI.AI.BudgetTracker>(sp =>
         {
@@ -488,25 +601,51 @@ public static class ServiceCollectionExtensions
             new LocalEmbedderModelSwitchNotifier(sp.GetService<LTAI.AI.LocalEmbedder>()));
 
         // Step 3c-bis: Skill Evolution Engine (L1-L3)
+        // SkillOpt-inspired v2 extensions: ValidationGate, EditBudget, RejectedBuffer, EvalBenchmark, BestSkillFormat
+        services.AddSingleton<SkillValidationGate>(sp =>
+        {
+            var judge = sp.GetKeyedService<IChatClient>("steer") ?? sp.GetRequiredService<IChatClient>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<SkillValidationGate>();
+            var skillsDir = ResolveSkillsDir();
+            return new SkillValidationGate(judge, logger, skillsDir);
+        });
+        services.AddSingleton<SkillEditBudget>(sp =>
+        {
+            var skillsDir = ResolveSkillsDir();
+            return new SkillEditBudget(skillsDir);
+        });
+        services.AddSingleton<SkillRejectedBuffer>(sp =>
+        {
+            var skillsDir = ResolveSkillsDir();
+            return new SkillRejectedBuffer(skillsDir);
+        });
+        services.AddSingleton<SkillEvalBenchmark>(sp =>
+        {
+            var gate = sp.GetRequiredService<SkillValidationGate>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<SkillEvalBenchmark>();
+            var skillsDir = ResolveSkillsDir();
+            return new SkillEvalBenchmark(gate, logger, skillsDir);
+        });
         services.AddSingleton<SkillEvolutionEngine>(sp =>
         {
             var llm = sp.GetRequiredService<IChatClient>();
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<SkillEvolutionEngine>();
-            var skillsDir = new[] {
-                Path.Combine(AppContext.BaseDirectory, "skills"),
-                Path.Combine(Directory.GetCurrentDirectory(), "skills"),
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "skills"),
-            }.FirstOrDefault(Directory.Exists) ?? Path.Combine(Directory.GetCurrentDirectory(), "skills");
-            return new SkillEvolutionEngine(llm, logger, skillsDir);
+            var skillsDir = ResolveSkillsDir();
+            return new SkillEvolutionEngine(llm, logger, skillsDir,
+                validationGate: sp.GetService<SkillValidationGate>(),
+                editBudget: sp.GetService<SkillEditBudget>(),
+                rejectedBuffer: sp.GetService<SkillRejectedBuffer>(),
+                evalBenchmark: sp.GetService<SkillEvalBenchmark>());
         });
 
-        // Step 3d: ChatAgent + workflow (default L1=flash, auto-upgrade to L2=pro)
+        // Step 3d: ChatAgent + escalation decider + workflow (default L1=flash, auto-upgrade to L2=pro)
+        services.AddSingleton<IEscalationDecider, DefaultEscalationDecider>();
         services.AddSingleton<ChatAgent>(sp =>
         {
             var all = sp.GetKeyedServices<AIAgent>(KeyedService.AnyKey)
                 .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
             var wf = sp.GetRequiredService<AgentWorkflows>();
-            var chat = all["LTAI-Chat"];
+            var chat = all[AgentNames.Chat];
             // P16: MoE Expert routing layer — wraps LTAI-Chat for knowledge-intensive queries.
             // Only activates when IsKnowledgeQuery returns true; casual chat passes through.
             var expertRouter = sp.GetRequiredService<ExpertRouter>();
@@ -516,7 +655,7 @@ public static class ServiceCollectionExtensions
             chat = new ExpertRouterAgent(chat, expertRouter, expertFanOut, expertAggregator, expertRegistry,
                 sp.GetService<ExpertFeedbackLogger>());
             // Pro agent for complex task auto-upgrade (uses l2 layer)
-            var proAgent = all.TryGetValue("LTAI-Chat-Pro", out var p) ? p : chat;
+            var proAgent = all.TryGetValue(AgentNames.ChatPro, out var p) ? p : chat;
             var budget = sp.GetService<LTAI.AI.BudgetTracker>();
 
             // Check if L1 and L2 use the same provider+model — skip upgrade (from appsettings.json)
@@ -535,7 +674,10 @@ public static class ServiceCollectionExtensions
                 tsParser: sp.GetService<LTAI.Agent.CodeAnalysis.TreeSitterParser>(),
                 lspManager: sp.GetService<LTAI.Agent.LanguageServer.LspLanguageManager>(),
                 checkpointStore: sp.GetService<IMemoryCachingStore>(),
-                escalationConfig: sp.GetRequiredService<IOptions<LTAIOptions>>().Value.Escalation);
+                escalationConfig: sp.GetRequiredService<IOptions<LTAIOptions>>().Value.Escalation,
+                grammarCheck: sp.GetService<LTAI.Agent.Pipeline.Steps.GrammarCheckStep>(),
+                pipelineRunner: sp.GetService<LTAI.Agent.Pipeline.PipelineRunner>(),
+                logger: sp.GetService<ILogger<ChatAgent>>());
         });
 
         // Step 7: PalaceStore (structured long-term memory) + consolidation service
@@ -559,6 +701,16 @@ public static class ServiceCollectionExtensions
             new CachingCascade());
 
         return services;
+    }
+
+    /// <summary>Resolve the skills directory across fallback paths.</summary>
+    private static string ResolveSkillsDir()
+    {
+        return new[] {
+            Path.Combine(AppContext.BaseDirectory, "skills"),
+            Path.Combine(Directory.GetCurrentDirectory(), "skills"),
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "skills"),
+        }.FirstOrDefault(Directory.Exists) ?? Path.Combine(Directory.GetCurrentDirectory(), "skills");
     }
 
     /// <summary>

@@ -331,7 +331,7 @@ public static class PlanTools
         // Notify ExecutionEngine that execution has started
         if (ExecutionEngine != null && _executionPlan.TryGetValue(SessionKey, out var execPlan))
         {
-            var startResult = Task.Run(() => ExecutionEngine.PlanAsync(plan.Summary)).GetAwaiter().GetResult();
+            var startResult = ExecutionEngine.PlanAsync(plan.Summary).GetAwaiter().GetResult();
             if (startResult != null)
             {
                 _executionPlan[SessionKey] = startResult;

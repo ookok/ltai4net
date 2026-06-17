@@ -1558,8 +1558,8 @@ public sealed class ReviewTools
 
     public string StoreAsyncCompat(string wing, string room, string content,
         double importance, string agentId, Dictionary<string, object>? metadata, long? ttlMs)
-        => Task.Run(() => _memoryStore!.StoreAsync(wing, room, content, role: "audit",
-            importance: importance, agentId: agentId, metadata: metadata, ttlMs: ttlMs))
+        => _memoryStore!.StoreAsync(wing, room, content, role: "audit",
+            importance: importance, agentId: agentId, metadata: metadata, ttlMs: ttlMs)
             .GetAwaiter().GetResult();
 
     // ── helpers ──

@@ -17,31 +17,55 @@ namespace LTAI.Agent.Tools;
 [RequiresDynamicCode("CSharpScriptTool 使用 Roslyn Scripting 运行时编译，NativeAOT 下不可用")]
 public sealed class CSharpScriptTool
 {
+    // Restricted safe imports — no Process/IO/Network/Reflection
     private static readonly string[] DefaultImports =
     [
-        "System", "System.IO", "System.Linq", "System.Text",
+        "System", "System.Linq", "System.Text",
         "System.Text.Json", "System.Collections.Generic",
         "System.Threading", "System.Threading.Tasks",
-        "System.Net.Http", "System.Diagnostics",
         "System.Text.RegularExpressions",
+        "System.Math",
+    ];
+
+    // Blocked patterns — code containing any of these is rejected before execution
+    private static readonly string[] BlockedPatterns =
+    [
+        "Process.Start", "ProcessStartInfo",
+        "File.Write", "File.Delete", "File.Move", "File.Copy", "File.Append",
+        "Directory.Delete", "Directory.Move", "Directory.Create",
+        "DllImport", "SuppressUnmanagedCodeSecurity",
+        "DangerousGetInternal", "Unsafe.As",
+        "Assembly.Load", "Assembly.LoadFrom", "Assembly.LoadFile",
+        "ProtectedData", "CryptographicException",
+        "Reflection.Emit", "DynamicMethod",
+        "Runtime.InteropServices", "Runtime.Interop",
+        "Microsoft.Win32",
+        "Environment.Exit", "Environment.FailFast",
+        "Console.WriteLine", "Console.Read",
+        "ServiceController", "ManagementObject",
+        "Socket", "TcpClient", "HttpListener",
+        "System.IO.Compression", "System.IO.Pipes",
+        "System.IO.Ports", "System.IO.MemoryMappedFiles",
     ];
 
     private static readonly ScriptOptions DefaultOptions = ScriptOptions.Default
         .WithImports(DefaultImports)
         .WithReferences(typeof(object).Assembly,
                         typeof(Uri).Assembly,
-                        typeof(HttpClient).Assembly,
                         typeof(Enumerable).Assembly,
-                        typeof(JsonSerializer).Assembly,
-                        typeof(DiagnosticListener).Assembly);
+                        typeof(JsonSerializer).Assembly);
 
     private int _execCount;
 
-    [Description("在进程中直接执行 C# 代码并返回结果。支持全部 .NET API。代码中可使用 return 返回值。注意：此工具在进程内执行代码，有安全风险，执行前由 MAF ToolApprovalAgent 审批。")]
+    [Description("在进程中执行受限 C# 代码。仅允许数据处理和算法（无文件 IO / 网络 / 进程 / 反射）。无法执行前由 MAF ToolApprovalAgent 审批。")]
     public async Task<string> RunCSharp(
         [Description("要执行的 C# 代码")] string code,
         CancellationToken ct = default)
     {
+        // ── Pre-flight security scan ──
+        if (BlockedPatterns.Any(p => code.Contains(p, StringComparison.Ordinal)))
+            return ToolResult.Error("C#Script: 代码包含被禁止的 API（文件/网络/进程/反射操作已禁用）");
+
         _execCount++;
         var sw = Stopwatch.StartNew();
         var id = _execCount;

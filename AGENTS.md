@@ -33,7 +33,15 @@ services.AddLTAIAI();       // LLM 路由器、嵌入
 services.AddLTAIAgent();    // 19 agents、编排、工具
 ```
 
-每个 agent 通过 `ServiceCollectionExtensions.GetAgentDefinitions()` 读取 `agents/*.agent.md` 注册为 MAF keyed service。ProviderRegistry 和 ModelAutoSelector 在 DI 启动时自动初始化。
+每个 agent 通过 `AgentDefinitionLoader.GetAgentDefinitions()` 读取 `agents/*.agent.md` 注册为 MAF keyed service。ProviderRegistry 和 ModelAutoSelector 在 DI 启动时自动初始化。
+
+以下 DI singleton 已注册供组件间共享：
+
+| 服务 | 接口 | 说明 |
+|------|------|------|
+| `AgentRegistry` | `IAgentRegistry` | Agent 定义加载 + 语义路由嵌入 |
+| `ToolRegistry` | `IToolRegistry` | 工具 BM25+向量+RRF 双路检索 |
+| `PromptLoader` | `IPromptLoader` | 提示词文件加载 + FileSystemWatcher 热重载 |
 
 ## Agent 定义
 
@@ -82,6 +90,73 @@ Layer 2: agents/*.agent.md (正文)        ← 领域专属工作流
 - 设置 `GrammarCheckBlocked` 标志，阻断新任务
 - `ChatAgent` 自动重试修复（上限 2 次）
 
+## Pipeline 架构
+
+`PipelineRunner`（`Pipeline/PipelineRunner.cs`）将 12 个 `IPipelineStep` 声明式组装为有序执行链，在 `MessageContext`（线程安全属性包）上顺序执行：
+
+```
+执行顺序（可跳过 null step）：
+  LoraAdapterStep → MemoryCachingStep(Restore) → RagContextStep
+  → ProactiveSuggestStep → SafetyCheckStep → RouterStep
+  → ToolExecutionStep → MemoryCachingStep(Save) → CompactionStep
+  → GrammarCheckStep → QualityGateStep → DoDCheckStep
+  → RetrospectiveStep
+```
+
+### 阻断链
+
+步骤可通过 `MessageContext` 标志提前终止管线：
+
+| 标志 | 来源步骤 | 效果 |
+|------|---------|------|
+| `SafetyBlocked` | SafetyCheckStep | 跳过 RouterStep 及后续，返回安全拦截消息 |
+| `GrammarCheckBlocked` | GrammarCheckStep | 阻断新任务，`ChatAgent` 自动重试修复（上限 2 次） |
+| `QualityGateBlocked` | QualityGateStep | 质量门禁未通过，触发重新生成 |
+| `DoDBlocked` | DoDCheckStep | 完成定义检查失败（含 TODO/FIXME/{{}}模板残留） |
+
+### PipelineRunner DI 注册
+
+```csharp
+services.AddSingleton<SafetyCheckStep>();
+services.AddSingleton<ToolExecutionStep>();
+services.AddSingleton<CompactionStep>();
+services.AddSingleton<DoDCheckStep>();
+services.AddSingleton<RetrospectiveStep>();
+services.AddSingleton<PipelineRunner>();
+```
+
+`PipelineRunner` 从 DI 解析所有已注册的 `IPipelineStep`，未注册步骤自动跳过。`ChatAgent` 通过 `PipelineRunner.RunPostGenerationAsync()` 统一执行后处理管线（MemoryCachingSave → Compaction → GrammarCheck → QualityGate → DoDCheck → Retrospective），替代了之前 3 处内联 `new GrammarCheckStep(...)` 的调用方式。
+
+## AgentContextProviderBuilder 实际顺序
+
+`AgentContextProviderBuilder.Build()` 组装 **20 个** `AIContextProvider`（文档注释写 16 个，实际更多），顺序如下：
+
+| 索引 | 提供者 | 类名 | 备注 |
+|------|--------|------|------|
+| 0 | 技能排名提供者 | `SkillRankingProvider` | 始终第一个 |
+| 1 | **安全协调器** | `SafetyCoordinator` | **可选** — 当 `LTAIOptions.AI.SkipSafetyChecks=false` 时在此插入 |
+| 1/2 | **内存权限提供者** | `MemoryAuthorityProvider` | 未在文档注释中列出 |
+| 2/3 | L0 身份提供者 | `L0IdentityProvider` | 身份声明 |
+| 3/4 | L1 基本提供者 | `L1EssentialProvider` | 5 条最近记忆 |
+| 4/5 | **规格上下文提供者** | `SpecContextProvider` | 未在文档注释中列出 |
+| 5/6 | 压缩提供者 | `CompactionProvider` | MAF 管道压缩 |
+| 6/7 | CCR 提供者 | `CCRProvider` | 内容压缩/检索标记 |
+| 7-10/8-11 | 知识图谱 | `KbGraph` | 按需 |
+| 7-10/8-11 | 代码图谱 | `CgGraph` | 按需 |
+| 7-10/8-11 | 代码块索引 | `CodeChunkIndex` | 按需 |
+| 7-10/8-11 | WASM 沙盒 | `WasmtimeSandbox` | 按需 |
+| 11/12 | L3 按需提供者 | `L3OnDemandProvider` | 任务相关记忆 |
+| 12/13 | L4 深度搜索提供者 | `L4DeepSearchProvider` | 语义深度搜索 |
+| 13/14 | L6 代理日记提供者 | `L6AgentDiaryProvider` | 日记条目 |
+| 14/15 | 来源提供者 | `ProvenanceProvider` | 知识来源追踪 |
+| 15/16 | 指令提供者 | `InstructionProvider` | 每个模型的指令提示 |
+| 16/17 | 环境提供者 | `EnvironmentProvider` | cwd / OS / 运行时 |
+| 17/18 | 技能提供者 | `AgentSkillsProvider` | 技能目录内容 |
+| 18/19 | 缓存对齐提供者 | `CacheAlignerProvider` | KV 缓存对齐提示 |
+| 19/20 | LSP 诊断提供者 | `LspDiagnosticsProvider` | LSP 诊断 |
+
+> 文档注释与实际差异：`MemoryAuthorityProvider` 和 `SpecContextProvider` 未在 doc 中列出。`ToolRetrievalProvider` 已删除（替换为 `ToolFilteringChatClient` IChatClient 中间件）。文档将 KbGraph/CgGraph/CodeChunkIndex/WasmtimeSandbox 合并为一条，实际是 4 个独立对象。
+
 ## 关键命令
 
 ```bash
@@ -95,7 +170,8 @@ dotnet build src/LTAI.Web                # 仅 Web
 cd src/LTAI.TUI && dotnet run            # 启动 TUI (Inline 模式，需先 build-terminalgui.ps1)
 cd src/LTAI.Desktop && dotnet run        # 启动 Desktop
 cd src/LTAI.Web && dotnet run            # 启动 Web → http://localhost:5100
-dotnet test tests/LTAI.Tests             # 运行测试（112+ 测试）
+dotnet test tests/LTAI.Tests                           # 运行所有测试
+dotnet test tests/LTAI.Tests --filter "Category!=Integration"  # 仅运行单元测试（跳过集成/网络测试）
 dotnet run -c Release --project tests/LTAI.Benchmarks  # BenchmarkDotNet
 dotnet run --project tests/LTAI.Benchmarks -- smoke    # 快速 smoke test
 ltai models show                         # 查看自动选拔的 L1/L2/L3 模型
@@ -170,7 +246,6 @@ Web: GET /ltai/v1/workflows
 - **MAF DevUI 仅在 `IsDevelopment()` 注册**（暴露 system prompt）。
 - **OTel console exporter** 默认开启；OTLP 需配置 `LTAI:Telemetry:OtlpEndpoint`。
 - **`ShellEnvironmentProvider` 已完全移除**（Windows .NET 10 上启动 PowerShell 进程卡 60+ 秒）。
-- **Pre-existing warnings** ~38 个（OfficeDocumentReader/DocumentTools/SkillEvolutionEngine/KbGraph）—— 不新增即可。
 - **持久化目录**：`.livingtree/`（SQLite 知识图谱 + 会话 + 任务队列）。删除可重置所有状态。
 - **配置**：`appsettings.json` `LTAI` 节 + 环境变量（DEEPSEEK_API_KEY 等）。仅需配置一个 API Key，L2/L3 自动选拔。
 - **Provider 元数据**：`models/models-dev-providers.json`（252KB，首次启动自动加载，后台 24h 刷新）。

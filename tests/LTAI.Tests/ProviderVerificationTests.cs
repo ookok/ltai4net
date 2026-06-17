@@ -9,6 +9,7 @@ using Xunit;
 
 namespace LTAI.Tests;
 
+[Trait("Category", "Integration")]
 public sealed class ProviderVerificationTests
 {
     private static readonly Dictionary<string, string> Secrets;
@@ -96,12 +97,12 @@ public sealed class ProviderVerificationTests
         { "Fireworks AI",   "fireworks_api_key",    "https://api.fireworks.ai/inference/v1" },
     };
 
-    [Theory]
+    [SkippableTheory]
     [MemberData(nameof(OpenAiCompatProviders))]
     public async Task OpenAiCompat_GetModels(string name, string secretsKey, string endpoint)
     {
         var apiKey = S(secretsKey);
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, $"No {secretsKey} configured");
         await AssertOk(name, async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, $"{endpoint.TrimEnd('/')}/models");
@@ -110,11 +111,11 @@ public sealed class ProviderVerificationTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task MiMoXiaomi_Endpoint()
     {
         var apiKey = S("xiaomi_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No xiaomi_api_key configured");
         // MiMo uses non-standard hostname; DNS may fail from CN
         var (ok, detail) = await Check(async http =>
         {
@@ -130,12 +131,12 @@ public sealed class ProviderVerificationTests
     //  Non-OpenAI-compatible LLM providers
     // ═══════════════════════════════════════════════════════════
 
-    [Fact]
+    [SkippableFact]
     public async Task Baidu_GetAccessToken()
     {
         var apiKey = S("baidu_api_key");
         var secretKey = S("baidu_secret_key");
-        if (apiKey == null || secretKey == null) return;
+        Skip.If(apiKey == null || secretKey == null, "No baidu_api_key or baidu_secret_key configured");
 
         using var http = new HttpClient { Timeout = Timeout };
         var resp = await http.PostAsync(
@@ -148,11 +149,11 @@ public sealed class ProviderVerificationTests
             "Baidu OAuth response contains access_token");
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Spark_ChatEndpoint()
     {
         var apiKey = S("spark_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No spark_api_key configured");
 
         // Spark API uses app_id in auth header; test basic reachability
         var (ok, detail) = await Check(async http =>
@@ -172,11 +173,11 @@ public sealed class ProviderVerificationTests
             $"Spark: {detail} (expected reachable, 400/401 OK for bad auth)");
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Baichuan_Endpoint()
     {
         var apiKey = S("bailing_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No bailing_api_key configured");
         await AssertOk("Baichuan", async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://api.baichuan-ai.com/v1/models");
@@ -185,11 +186,11 @@ public sealed class ProviderVerificationTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task LongCat_Endpoint()
     {
         var apiKey = S("longcat_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No longcat_api_key configured");
         var (ok, detail) = await Check(async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://api.longcat.ai/v1/models");
@@ -203,11 +204,11 @@ public sealed class ProviderVerificationTests
         }
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task DMXAPI_Endpoint()
     {
         var apiKey = S("dmxapi_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No dmxapi_api_key configured");
         var (ok, detail) = await Check(async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://api.dmxapi.com/v1/models");
@@ -219,11 +220,11 @@ public sealed class ProviderVerificationTests
             $"DMXAPI: {detail} (expected reachable, SSL/DNS failure OK)");
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task NVIDIA_Endpoint()
     {
         var apiKey = S("nvidia_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No nvidia_api_key configured");
         await AssertOk("NVIDIA", async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://integrate.api.nvidia.com/v1/models");
@@ -232,11 +233,11 @@ public sealed class ProviderVerificationTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task InternLM_Endpoint()
     {
         var apiKey = S("internlm_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No internlm_api_key configured");
         var (ok, detail) = await Check(async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://api.internlm.ai/v1/models");
@@ -247,11 +248,11 @@ public sealed class ProviderVerificationTests
             Assert.Contains("DNS", detail, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task ModelScope_Endpoint()
     {
         var apiKey = S("modelscope_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No modelscope_api_key configured");
         var (ok, detail) = await Check(async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://api.modelscope.cn/v1/models");
@@ -262,11 +263,11 @@ public sealed class ProviderVerificationTests
             Assert.Contains("DNS", detail, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task SenseTime_Endpoint()
     {
         var apiKey = S("sensetime_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No sensetime_api_key configured");
         var (ok, detail) = await Check(async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://api.sensetime.com/v1/models");
@@ -277,11 +278,11 @@ public sealed class ProviderVerificationTests
             Assert.Contains("DNS", detail, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Mofang_Endpoint()
     {
         var apiKey = S("mofang_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No mofang_api_key configured");
         var (ok, detail) = await Check(async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://api.mofang.ai/v1/models");
@@ -296,11 +297,11 @@ public sealed class ProviderVerificationTests
     //  Search providers
     // ═══════════════════════════════════════════════════════════
 
-    [Fact]
+    [SkippableFact]
     public async Task BraveSearch_Endpoint()
     {
         var apiKey = S("brave_search_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No brave_search_api_key configured");
         await AssertOk("Brave Search", async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://api.search.brave.com/res/v1/web/search?q=ping");
@@ -310,11 +311,11 @@ public sealed class ProviderVerificationTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Serper_Endpoint()
     {
         var apiKey = S("serper_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No serper_api_key configured");
         await AssertOk("Serper", async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Post, "https://google.serper.dev/search");
@@ -328,11 +329,11 @@ public sealed class ProviderVerificationTests
     //  Memory provider
     // ═══════════════════════════════════════════════════════════
 
-    [Fact]
+    [SkippableFact]
     public async Task Mem0_Endpoint()
     {
         var apiKey = S("mem0_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No mem0_api_key configured");
         var (ok, detail) = await Check(async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://api.mem0.ai/v1/memories");
@@ -347,13 +348,13 @@ public sealed class ProviderVerificationTests
     //  SMTP connectivity (TCP only, does not send email)
     // ═══════════════════════════════════════════════════════════
 
-    [Theory]
+    [SkippableTheory]
     [InlineData(587)]
     [InlineData(465)]
     public async Task Smtp_TcpConnect(int port)
     {
         var host = S("smtp_host") ?? S("smtp_server");
-        if (string.IsNullOrEmpty(host)) return;
+        Skip.If(string.IsNullOrEmpty(host), "No smtp_host or smtp_server configured");
 
         using var tcp = new TcpClient();
         try
@@ -375,20 +376,20 @@ public sealed class ProviderVerificationTests
     //  Weather APIs
     // ═══════════════════════════════════════════════════════════
 
-    [Fact]
+    [SkippableFact]
     public async Task OpenWeatherMap_Endpoint()
     {
         var apiKey = S("openweathermap_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No openweathermap_api_key configured");
         await AssertOk("OpenWeatherMap", async http =>
             await http.GetAsync($"https://api.openweathermap.org/data/2.5/weather?q=Beijing&appid={apiKey}"));
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task QWeather_Endpoint()
     {
         var apiKey = S("qweather_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No qweather_api_key configured");
         var (ok, detail) = await Check(async http =>
             await http.GetAsync($"https://devapi.qweather.com/v7/weather/now?location=116.40,39.90&key={apiKey}"));
         Assert.True(ok || detail.Contains("403"),
@@ -399,11 +400,11 @@ public sealed class ProviderVerificationTests
     //  Map / GIS APIs
     // ═══════════════════════════════════════════════════════════
 
-    [Fact]
+    [SkippableFact]
     public async Task Tianditu_Endpoint()
     {
         var apiKey = S("tianditu_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No tianditu_key configured");
         var (ok, detail) = await Check(async http =>
         {
             // Tianditu v2 geocode API
@@ -415,29 +416,29 @@ public sealed class ProviderVerificationTests
             $"Tianditu: {detail} (404 OK — API version may differ)");
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task TencentMap_Endpoint()
     {
         var apiKey = S("tencent_map_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No tencent_map_key configured");
         await AssertOk("Tencent Map", async http =>
             await http.GetAsync($"https://apis.map.qq.com/ws/geocoder/v1/?address=北京市&key={apiKey}"));
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task BaiduMap_Endpoint()
     {
         var ak = S("baidu_map_ak");
-        if (ak == null) return;
+        Skip.If(ak == null, "No baidu_map_ak configured");
         await AssertOk("Baidu Map", async http =>
             await http.GetAsync($"https://api.map.baidu.com/geocoding/v3/?address=北京市&output=json&ak={ak}"));
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Amap_Endpoint()
     {
         var apiKey = S("amap_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No amap_key configured");
         await AssertOk("Amap(高德)", async http =>
             await http.GetAsync($"https://restapi.amap.com/v3/geocode/geo?address=北京市&output=json&key={apiKey}"));
     }
@@ -446,12 +447,12 @@ public sealed class ProviderVerificationTests
     //  Translation API
     // ═══════════════════════════════════════════════════════════
 
-    [Fact]
+    [SkippableFact]
     public async Task BaiduTranslate_Endpoint()
     {
         var appId = S("baidu_translate_appid");
         var secretKey = S("baidu_translate_key");
-        if (appId == null || secretKey == null) return;
+        Skip.If(appId == null || secretKey == null, "No baidu_translate_appid or baidu_translate_key configured");
 
         var q = "hello";
         var salt = RandomNumberGenerator.GetInt32(100000, 999999).ToString();
@@ -467,11 +468,11 @@ public sealed class ProviderVerificationTests
     //  Image APIs
     // ═══════════════════════════════════════════════════════════
 
-    [Fact]
+    [SkippableFact]
     public async Task Unsplash_Endpoint()
     {
         var apiKey = S("unsplash_access_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No unsplash_access_key configured");
         await AssertOk("Unsplash", async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://api.unsplash.com/photos?per_page=1");
@@ -480,11 +481,11 @@ public sealed class ProviderVerificationTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Pixabay_Endpoint()
     {
         var apiKey = S("pixabay_api_key");
-        if (apiKey == null) return;
+        Skip.If(apiKey == null, "No pixabay_api_key configured");
         var (ok, detail) = await Check(async http =>
             await http.GetAsync($"https://pixabay.com/api/?key={apiKey}&q=ping&per_page=1"));
         Assert.True(ok || detail.Contains("400"),
@@ -495,11 +496,11 @@ public sealed class ProviderVerificationTests
     //  GitHub API
     // ═══════════════════════════════════════════════════════════
 
-    [Fact]
+    [SkippableFact]
     public async Task GitHub_Endpoint()
     {
         var token = S("github_token");
-        if (token == null) return;
+        Skip.If(token == null, "No github_token configured");
         await AssertOk("GitHub", async http =>
         {
             var req = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user");

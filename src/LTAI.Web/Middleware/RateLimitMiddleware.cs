@@ -55,7 +55,7 @@ public sealed class RateLimitMiddleware
                 }
             }
             foreach (var key in keysToRemove)
-                _windows.TryRemove(new KeyValuePair<string, WindowState>(key, _windows[key]));
+                _windows.TryRemove(key, out _);
         }
 
         var window = _windows.AddOrUpdate(ip,

@@ -58,9 +58,36 @@ internal static class AgentDefinitionLoader
         var fileDefs = AgentRegistry.LoadAll();
         if (fileDefs.Count > 0)
         {
+            // First pass: build name lookup for inheritTools resolution
+            var defByName = new Dictionary<string, AgentFileDef>(StringComparer.OrdinalIgnoreCase);
+            foreach (var def in fileDefs)
+            {
+                if (def.Name != null)
+                    defByName[def.Name] = def;
+            }
+
+            // Second pass: yield with inheritTools resolved
             foreach (var def in fileDefs)
             {
                 var key = def.Name?.ToLowerInvariant().Replace("ltai-", "") ?? "unknown";
+                var tools = def.Tools;
+
+                // Resolve inheritTools: parent name can be "chat" or "LTAI-Chat"
+                if (!string.IsNullOrEmpty(def.InheritTools))
+                {
+                    var parentName = def.InheritTools;
+                    if (!defByName.ContainsKey(parentName))
+                        parentName = "LTAI-" + parentName;
+                    if (defByName.TryGetValue(parentName, out var parent) && parent.Tools.Length > 0)
+                    {
+                        // Merge: inherit parent's tools, deduplicate, keep child's order
+                        var inherited = new HashSet<string>(parent.Tools, StringComparer.OrdinalIgnoreCase);
+                        foreach (var t in tools)
+                            inherited.Add(t);
+                        tools = inherited.ToArray();
+                    }
+                }
+
                 yield return new AgentDef(
                     Name: def.Name ?? key,
                     Description: def.Description,
@@ -72,7 +99,7 @@ internal static class AgentDefinitionLoader
                     Temperature: def.Temperature is >= -2 and <= 2 ? (float?)def.Temperature : null,
                     TopP: (float?)def.TopP,
                     Prompt: def.Prompt,
-                    Tools: def.Tools);
+                    Tools: tools);
             }
             // Internal router agent (not from files) — used by AgentWorkflows for handoff routing
             yield return new("LTAI-Router", "任务调度器(无工具)", false, false, false, false, null, 0.3f, 0.95f, Prompt: null);
@@ -93,5 +120,15 @@ internal static class AgentDefinitionLoader
         yield return new("LTAI-Frontend", "前端网页开发助手",       true,  true,  true,  true,  null, 0.8f, 0.95f);
         yield return new("LTAI-DCI",      "直接语料交互助手(DCI)",   true,  false, true,  true,  null, 0.3f, 0.95f);
         yield return new("LTAI-Plan",     "架构规划师(只读)",       true,  false, true,  false, null, 0.5f, 0.95f);
+        yield return new("LTAI-SQL",      "数据库查询助手",         true,  false, true,  false, null, 0.3f, 0.95f);
+        yield return new("LTAI-API",      "API 开发与集成助手",     true,  true,  true,  true,  null, 0.3f, 0.95f);
+        yield return new("LTAI-Arch",     "架构设计助手",           true,  false, true,  false, null, 0.3f, 0.95f);
+        yield return new("LTAI-Test",     "测试编写与执行助手",     true,  true,  true,  true,  null, 0.3f, 0.95f);
+        yield return new("LTAI-Review",   "代码审查助手",           true,  false, true,  false, null, 0.3f, 0.95f);
+        yield return new("LTAI-Debug",    "调试诊断助手",           true,  true,  true,  true,  null, 0.3f, 0.95f);
+        yield return new("LTAI-Security", "安全分析助手",           true,  true,  true,  false, null, 0.3f, 0.95f);
+        yield return new("LTAI-DevOps",   "DevOps 运维助手",        true,  true,  true,  true,  null, 0.3f, 0.95f);
+        yield return new("LTAI-Office",   "Office 文档处理助手",    true,  true,  true,  true,  null, 0.3f, 0.95f);
+        yield return new("LTAI-ScrumMaster", "Scrum Master 协调者", true,  false, true,  false, null, 0.2f, 0.9f);
     }
 }

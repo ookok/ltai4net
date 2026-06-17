@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Threading;
+using LTAI.Core;
 
 namespace LTAI.Agent.Tools;
 
@@ -143,14 +144,24 @@ public sealed class BackgroundJobService : IDisposable, IAsyncDisposable
     {
         try
         {
-            // Wait if paused
+            // ── Security: block dangerous commands ──
+            if (ShellSecurity.IsBlocked(command))
+            {
+                entry.Error = "后台作业包含危险操作，已阻止";
+                entry.ExitCode = -1;
+                return;
+            }
+
+            // Wait if paused (sync wait on threadpool — safe, no ASP.NET context)
             try { _pauseEvent.Wait(_cts.Token); }
             catch (OperationCanceledException) { ReleaseConcurrency(id); return; }
 
+            var isWindows = Environment.OSVersion.Platform == PlatformID.Win32NT;
+            var escapedCmd = isWindows ? ShellSecurity.EscapeCmdArg(command) : ShellSecurity.EscapeBashArg(command);
             var psi = new ProcessStartInfo
             {
-                FileName = Environment.OSVersion.Platform == PlatformID.Win32NT ? "cmd.exe" : "/bin/bash",
-                Arguments = Environment.OSVersion.Platform == PlatformID.Win32NT ? $"/c \"{command}\"" : $"-c '{command}'",
+                FileName = isWindows ? "cmd.exe" : "/bin/bash",
+                Arguments = isWindows ? $"/c \"{escapedCmd}\"" : $"-c \"{escapedCmd}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,

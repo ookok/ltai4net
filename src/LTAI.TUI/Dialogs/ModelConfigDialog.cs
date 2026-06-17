@@ -160,7 +160,11 @@ public sealed class ModelConfigDialog : Dialog
             var model = l.TryGetProperty("Model", out var m) ? m.GetString() ?? "" : "";
             return (provider, model);
         }
-        catch { return ("", ""); }
+        catch
+        {
+            // non-critical, best-effort
+            return ("", "");
+        }
     }
 
     private void OnFetchModels(object? s, EventArgs e)

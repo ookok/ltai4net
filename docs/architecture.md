@@ -60,6 +60,7 @@ flowchart TB
 
     subgraph L0["L0 - Runtime & Infrastructure"]
         MAF["MAF Pipeline<br/>ChatClientAgent<br/>AIContextProvider Chain"]
+        PL["PipelineRunner<br/>12 IPipelineSteps<br/>LoraAdapter → MemoryCaching<br/>→ RagContext → SafetyCheck<br/>→ Router → ToolExec → Compaction<br/>→ GrammarCheck → QualityGate<br/>→ DoDCheck → Retrospective"]
         BT["BudgetTracker<br/>Global: 1M / User: 200K"]
         UT["UsageTracker<br/>IUsageTracker + DI Scoped"]
         WS["WasmtimeSandbox<br/>WASM execution v44<br/>WASI restrictions"]
@@ -70,6 +71,7 @@ flowchart TB
         MAF --> CG
         MAF --> SC
         MAF --> WS
+        PL --> MAF
     end
 
     subgraph CC["Cross-Cutting"]
@@ -91,20 +93,34 @@ flowchart TB
 | L3 Tool System | 工具执行、权限控制、语义工具检索 | L2 Memory | L4 Orchestration |
 | L2 Memory | 知识/代码图谱、语义检索、记忆宫殿 | L1 LLM | L3 Tools |
 | L1 LLM & Routing | Provider 注册、模型自动选拔、LLM 路由、安全防护 | L0 Runtime | L2 Memory |
-| L0 Runtime | MAF 管线、沙箱、监控、跨平台 PTY | - | 全层 |
+| L0 Runtime | MAF 管线、PipelineRunner (12 IPipelineSteps)、沙箱、监控、跨平台 PTY | - | 全层 |
 
 ## 数据流
 
+### 用户输入到响应
+
 ```
-User Input → ChatAgent → Budget Check → Safety Input Guard → KbGraph/CgGraph Context Injection
-  → Memory Palace (7 layers) → ToolFilteringChatClient → Compaction
-  → MultiProviderChatClient (L1 auto-selected model)
-  → ToolCall Repairer (if tool call) → Tool Execution (via ToolSet)
-  → ToolResult → ToolFilteringChatClient (semantic re-selection)
-  → SafeChatClient Output Guard → Reflection Loop
-  → L1 quality inadequate → ModelAutoSelector escalates to L2
-  → Full regeneration or FusionRoute (span-level) → Response
+User Input → ChatAgent → Budget Check → Safety Input Guard → Memory/KB context injection
+  → PipelineRunner (12 IPipelineSteps):
+      LoraAdapterStep → MemoryCachingStep(Restore) → RagContextStep
+      → ProactiveSuggestStep → SafetyCheckStep → RouterStep
+      → ToolExecutionStep → MemoryCachingStep(Save) → CompactionStep
+      → GrammarCheckStep → QualityGateStep → DoDCheckStep
+      → RetrospectiveStep
+  → MultiProviderChatClient (L1/L2/L3 tiered LLM)
+  → SafeChatClient Output Guard → Response
 ```
+
+### 阻断链
+
+PipelineRunner 在以下步骤支持提前终止：
+
+| 阻断点 | 触发条件 | 后续行为 |
+|--------|---------|---------|
+| `SafetyCheckStep` | 检测到 prompt 注入/PII/凭证泄露 | 跳过 RouterStep 及后续，返回安全拦截消息 |
+| `GrammarCheckStep` | QuickParse/RuleEngine/LSP 发现语法错误 | 阻断新任务，ChatAgent 自动重试修复（上限 2 次） |
+| `QualityGateStep` | 输出质量评分 < 0.6 | 触发重新生成 |
+| `DoDCheckStep` | 发现 TODO/FIXME/{{}}模板残留 | 完成定义检查失败 |
 
 ## 模型自动选拔流程
 
@@ -148,4 +164,5 @@ CLI 覆盖:
 | **知识图谱** | SQLite FTS5 + CTE | 零运维、单用户够用 |
 | **沙箱** | Wasmtime v44 | 成熟度 (129 万下载) > Hyperlight (v0.4) |
 | **上下文压缩** | LLM 摘要 + 验证 | 防幻觉累积 |
+| **语义 KV 缓存** | LSH 随机投影索引 (16 位) | ≤1000 entries 时 O(1) 近似搜索替代 O(n) 全扫描 |
 | **会话持久** | .livingtree/sessions/ | 进程重启不丢上下文 |

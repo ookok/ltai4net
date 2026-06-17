@@ -698,17 +698,13 @@ public sealed partial class ChatView : UserControl, IChatRenderer
         Border? taskBanner = null;
         var firstTokenReceived = false;
 
-        // A5: dispose previous CTS before reassignment to avoid timer leak
-        var oldCts = Interlocked.Exchange(ref _cts, null);
-        if (oldCts is { IsCancellationRequested: false })
+        // A5: atomically replace CTS, cancel + dispose the old one
+        var oldCts = Interlocked.Exchange(ref _cts, new CancellationTokenSource());
+        if (oldCts != null)
         {
-            try { oldCts.Cancel(); } catch (ObjectDisposedException)
-            {
-                // non-critical, best-effort
-            }
+            try { oldCts.Cancel(); } catch { /* oldCts may already be cancelled */ }
             oldCts.Dispose();
         }
-        Interlocked.CompareExchange(ref _cts, new CancellationTokenSource(), null);
         var responseBuf = new StringBuilder();
         var thinkBuf = new StringBuilder();
         var inThinking = false;
@@ -1176,23 +1172,24 @@ public sealed partial class ChatView : UserControl, IChatRenderer
     // ── IChatRenderer ──
 
     void IChatRenderer.OnStreamStart() { }
-    void IChatRenderer.OnTextDelta(string delta) { }
-    void IChatRenderer.OnToolCall(string name, string? arguments) { }
-    void IChatRenderer.OnToolResult(string name, string result, bool success) { }
+    ValueTask IChatRenderer.OnTextDelta(string delta) => default;
+    ValueTask IChatRenderer.OnToolCall(string name, string? arguments) => default;
+    ValueTask IChatRenderer.OnToolResult(string name, string result, bool success) => default;
     void IChatRenderer.OnStreamEnd() { }
 
-    void IChatRenderer.RenderMessage(string role, string content,
+    ValueTask IChatRenderer.RenderMessage(string role, string content,
         IReadOnlyList<ToolCallRecord>? toolCalls, string? reasoning)
     {
         var label = role == "user" ? "[You]" : "[LTAI]";
         var accent = role == "user" ? LtaiTheme.ChatUser : LtaiTheme.ChatAI;
         var border = LtaiTheme.Border;
         Dispatcher.UIThread.Post(() => AddBubble(label, content, accent, border));
+        return default;
     }
 
     void IChatRenderer.UpdateStatus(string text) { }
 
-    void IChatRenderer.UpdateProgress(string frame, string text, string? elapsed) { }
+    ValueTask IChatRenderer.UpdateProgress(string frame, string text, string? elapsed) => default;
 
     ToolResultInfo IChatRenderer.TryParseToolResult(string text)
     {

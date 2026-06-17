@@ -29,6 +29,7 @@ using Xunit;
 
 namespace LTAI.Tests.A2A;
 
+[Trait("Category", "Integration")]
 public class A2AIntegrationTests
 {
     [Fact]

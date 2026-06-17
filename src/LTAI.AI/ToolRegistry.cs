@@ -27,11 +27,21 @@ namespace LTAI.AI;
 ///   1. Local ONNX (all-MiniLM-L6-v2, 384d)
 ///   2. Remote API providers
 ///   3. BM25 (FastEmb) fallback
+///
+/// Backward-compatible static access preserved.
+/// DI users inject <see cref="IToolRegistry"/> (same singleton instance).
 /// </summary>
-public static class ToolRegistry
+public sealed class ToolRegistry : IToolRegistry
 {
+    /// <summary>Shared default instance for static method delegation and DI.</summary>
+    private static readonly Lazy<ToolRegistry> _default = new(() => new ToolRegistry());
+
     /// <summary>单个工具的定义 + embedding + domain。</summary>
     public sealed record ToolDef(string Name, string Description, float[] Embedding, string Domain = "");
+
+    // ═══════════════════════════════════════════
+    //  Static implementation (preserved for backward compat)
+    // ═══════════════════════════════════════════
 
     private static readonly List<ToolDef> _tools = new();
     private static volatile bool _initialized;
@@ -535,6 +545,41 @@ public static class ToolRegistry
 
     private static float CosineSimilarity(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
         => VectorMath.CosineSimilarity(a, b);
+
+    // ═══════════════════════════════════════════
+    //  IToolRegistry explicit interface implementation
+    //  (delegates to static methods above)
+    // ═══════════════════════════════════════════
+
+    bool IToolRegistry.IsInitialized => _initialized;
+    IReadOnlyList<ToolDef> IToolRegistry.AllTools => _snapshot;
+
+    Task IToolRegistry.InitializeAsync(IEnumerable<AITool> tools, EmbeddingClient embedder, ToolEmbeddingCache? cache, CancellationToken ct)
+        => InitializeAsync(tools, embedder, cache, ct);
+
+    Task<List<ToolDef>> IToolRegistry.SearchTopKAsync(string query, EmbeddingClient embedder, int k, CancellationToken ct)
+        => SearchTopKAsync(query, embedder, k, ct);
+
+    Task<List<ToolDef>> IToolRegistry.SearchTopKAsync(string query, EmbeddingClient embedder, string? domain, int k, CancellationToken ct)
+        => SearchTopKAsync(query, embedder, domain, k, ct);
+
+    Task<List<ToolDef>> IToolRegistry.SearchTopKAsync(string query, EmbeddingClient embedder, string? domain, int k, float[]? queryEmbedding, CancellationToken ct)
+        => SearchTopKAsync(query, embedder, domain, k, queryEmbedding, ct);
+
+    void IToolRegistry.RecordCall(string toolName, bool success, long latencyMs)
+        => RecordCall(toolName, success, latencyMs);
+
+    IReadOnlyDictionary<string, ToolStats> IToolRegistry.GetAllStats() => GetAllStats();
+
+    ToolStats? IToolRegistry.GetStats(string toolName) => GetStats(toolName);
+
+    void IToolRegistry.ResetStats() => ResetStats();
+
+    IReadOnlyList<ToolDef> IToolRegistry.GetToolsByDomain(string domain) => GetToolsByDomain(domain);
+
+    void IToolRegistry.Clear() => Clear();
+
+    void IToolRegistry.ClearEmbeddings() => ClearEmbeddings();
 }
 
 /// <summary>

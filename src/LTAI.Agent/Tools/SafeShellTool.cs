@@ -29,44 +29,6 @@ public sealed class SafeShellTool
     private readonly HashSet<string>? _allowList;
     private readonly IHttpClientFactory? _httpFactory;
 
-    private static readonly HashSet<string> BlockedExes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "sudo", "su", "chmod", "chown", "mkfs", "fdisk",
-        "dd", "shutdown", "reboot", "init", "halt", "poweroff",
-        "passwd", "useradd", "usermod", "groupadd", "fuser", "kill",
-        "mount", "umount", "iptables", "ufw", "systemctl",
-        "cmd", "cmd.exe", "certutil", "bitsadmin", "mshta", "cscript", "wmic",
-        "reg", "schtasks", "diskpart", "bcdedit", "regsvr32", "rundll32",
-        "attrib", "cacls", "takeown", "icacls",
-    };
-
-    private static readonly string[] DangerousPatterns =
-    {
-        "rm -rf /", "rm -rf ~", "rm -rf --no-preserve-root",
-        ":(){ :|:& };:", "eval ", "exec ",
-        "> /dev/", "dd if=", "wget -O - | sh", "curl .* | sh",
-        "wget .* -O ", "certutil .* -urlcache", "bitsadmin .* /transfer",
-    };
-
-    private static readonly HashSet<string> CodeExecNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "bash", "sh", "zsh", "dash", "ksh", "fish",
-        "python", "python2", "python3", "py",
-        "perl", "perl5",
-        "ruby", "rake",
-        "php",
-        "lua", "luajit",
-        "tclsh", "wish",
-        "powershell", "pwsh", "powershell.exe", "pwsh.exe",
-    };
-
-    private static readonly HashSet<string> CodeExecArgs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "-c", "-command", "-e", "-i",
-    };
-
-    private static readonly string[] CommandSeps = { " & ", " && ", " || ", " | ", "; " };
-
     /// <param name="ws">工作目录，所有命令在此执行。</param>
     /// <param name="allowList">可选白名单，null=允许所有命令。</param>
     /// <param name="httpFactory">可选，用于检测网络。</param>
@@ -90,41 +52,13 @@ public sealed class SafeShellTool
     public async Task<string> RunCommand(
         [Description("要执行的 shell 命令")] string command,
         [Description("工作目录（相对于项目根，默认 .）")] string cwd = ".",
-        [Description("超时秒数：编译类建议 300，简单命令 60")] int timeoutSec = 60)
+        [Description("超时秒数：编译类建议 300，简单命令 60")] int timeoutSec = 60,
+        CancellationToken ct = default)
     {
 
-        // ⚠️ 安全：禁止危险命令（token 级白名单 + 模式匹配双重防护）
-        var cmdLower = command.ToLowerInvariant();
-
-        var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var executable = parts.Length > 0 ? parts[0].Trim() : "";
-        var executableName = Path.GetFileName(executable.Trim('"').AsSpan()).ToString();
-
-        if (BlockedExes.Contains(executableName))
+        // ⚠️ 安全：ShellSecurity 统一禁止危险命令
+        if (ShellSecurity.IsBlocked(command))
             return "❌ 命令包含危险操作，已阻止";
-
-        if (DangerousPatterns.Any(p => cmdLower.Contains(p)))
-            return "❌ 命令包含危险操作，已阻止";
-
-        if (parts.Length >= 2 && CodeExecNames.Contains(parts[0]) && CodeExecArgs.Contains(parts[1]))
-            return "❌ 命令包含代码执行操作 (-c/-e/-command)，已阻止";
-
-        foreach (var sep in CommandSeps)
-        {
-            if (cmdLower.Contains(sep))
-            {
-                var partsChk = command.Split(new[] { "&&", "||", "|", "&", ";" }, StringSplitOptions.TrimEntries);
-                foreach (var part in partsChk)
-                {
-                    var partExec = part.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                    if (partExec.Length == 0) continue;
-                    var pn = Path.GetFileName(partExec[0].AsSpan()).ToString();
-                    if (BlockedExes.Contains(pn) || CodeExecNames.Contains(pn))
-                        return $"❌ 命令包含危险操作（{pn}），已阻止";
-                }
-                break;
-            }
-        }
 
         // 白名单检查
         if (_allowList != null)
@@ -151,7 +85,7 @@ public sealed class SafeShellTool
         var psi = new ProcessStartInfo
         {
             FileName = isWindows ? "cmd.exe" : "/bin/bash",
-            Arguments = isWindows ? $"/c \"{EscapeCmdArg(command)}\"" : $"-c \"{EscapeBashArg(command)}\"",
+            Arguments = isWindows ? $"/c \"{ShellSecurity.EscapeCmdArg(command)}\"" : $"-c \"{ShellSecurity.EscapeBashArg(command)}\"",
             WorkingDirectory = fullCwd,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -183,7 +117,8 @@ public sealed class SafeShellTool
             {
             process.Start();
 
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSec));
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
             var ctk = timeoutCts.Token;
 
             // 并读 stdout + stderr（直接 async，不 Task.Run）
@@ -224,16 +159,6 @@ public sealed class SafeShellTool
         {
             return $"❌ 执行失败: {ex.Message}";
         }
-    }
-
-    private static string EscapeCmdArg(string arg)
-    {
-        return arg.Replace("\"", "\"\"");
-    }
-
-    private static string EscapeBashArg(string arg)
-    {
-        return arg.Replace("\\", "\\\\").Replace("\"", "\\\"");
     }
 
     private static async Task ReadStreamAsync(StreamReader reader, StringBuilder sb, char[] buffer, CancellationToken ct = default)

@@ -6,6 +6,7 @@ using LTAI.Agent;
 using LTAI.Agent.Tools;
 using LTAI.Core.Session;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.Editor;
@@ -37,6 +38,9 @@ public sealed class MainWindow : Window
     private System.Threading.Timer? _statsTimer;
     private long _lastUIUpdate;
     private const int UI_THROTTLE_MS = 50;
+    private string _gitBranch = "—";
+    private Label? _gitBranchLabel;
+    private readonly ILogger<MainWindow> _logger;
 
     private readonly FrameView _homePanel;
     private readonly View _chatPanel;
@@ -71,12 +75,14 @@ public sealed class MainWindow : Window
         @"(?:编辑|写入|创建)\s+`?([^\s`]+\.\w+)`?", 
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    public MainWindow(IApplication app, ChatAgent chat, SessionManager sessionMgr, string l1ModelLabel = "未配置模型", IServiceProvider? sp = null)
+    public MainWindow(IApplication app, ChatAgent chat, SessionManager sessionMgr,
+        ILogger<MainWindow> logger, string l1ModelLabel = "未配置模型", IServiceProvider? sp = null)
     {
         _app = app;
         _chat = chat;
         _sessionMgr = sessionMgr;
         _sp = sp!;
+        _logger = logger;
         Title = "LTAI";
         Width = Dim.Fill();
         Height = Dim.Fill();
@@ -156,7 +162,7 @@ public sealed class MainWindow : Window
         _homePanel.Add(new Label
         {
             X = Pos.Center(), Y = 18,
-            Text = "/model 配置模型  ·  /help 帮助  ·  Ctrl+T TextPad  ·  Ctrl+Q 退出",
+            Text = "/model 配置模型  ·  /help 帮助  ·  Ctrl+P 命令  ·  Ctrl+Q 退出",
         });
 
         _homeModelLabel = new Label
@@ -186,7 +192,6 @@ public sealed class MainWindow : Window
 
         var cwd = Directory.GetCurrentDirectory();
         var cwdDisplay = cwd.Length > 22 ? "..." + cwd[^19..] : cwd;
-        var gitBranch = GetGitBranch();
         var version = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version;
         var verStr = version != null ? $"v{version.Major}.{version.Minor}.{version.Build}" : "dev";
 
@@ -206,7 +211,7 @@ public sealed class MainWindow : Window
             _sidebarCache,
             _sidebarTodos,
             _sidebarFiles,
-            new Label { X = 1, Y = Pos.AnchorEnd(3), Text = $" {gitBranch}", Width = Dim.Fill() - 1 },
+            _gitBranchLabel = new Label { X = 1, Y = Pos.AnchorEnd(3), Text = $" {_gitBranch}", Width = Dim.Fill() - 1 },
             new Label { X = 1, Y = Pos.AnchorEnd(2), Text = $" {cwdDisplay}", Width = Dim.Fill() - 1 },
             new Label { X = 1, Y = Pos.AnchorEnd(1), Text = $" {verStr}", Width = Dim.Fill() - 1 }
         );
@@ -240,7 +245,7 @@ public sealed class MainWindow : Window
             new TgAttribute(Color.DarkGray, Color.Black)));
         inputAreaView.Add(_inputPlaceholder);
 
-        var inputHint = new Label { X = 1, Y = 2, Text = "Shift+Enter 换行  ·  / 命令  ·  Ctrl+C 复制  ·  Tab 切换模式", Width = Dim.Fill() };
+        var inputHint = new Label { X = 1, Y = 2, Text = "Shift+Enter 换行  ·  Ctrl+P 命令  ·  Ctrl+C 复制  ·  Tab 切换模式", Width = Dim.Fill() };
         inputHint.SetScheme(new Scheme(
             new TgAttribute(Color.DarkGray, Color.Black)));
         inputAreaView.Add(inputHint);
@@ -301,6 +306,8 @@ public sealed class MainWindow : Window
         }, null, 2000, 2000);
 
         RestoreSession();
+
+        _ = FetchGitBranchAsync();
     }
 
     // ═══════════════════════════════════
@@ -324,6 +331,7 @@ public sealed class MainWindow : Window
         ("model",    "配置/查看模型"),
         ("new",      "新建会话"),
         ("sessions", "历史会话"),
+        ("search",   "搜索对话历史"),
         ("clear",    "清空对话"),
         ("retry",    "重试上一条"),
         ("status",   "当前状态"),
@@ -444,6 +452,59 @@ public sealed class MainWindow : Window
                     _agentMode == "plan" ? Color.BrightYellow : Color.BrightCyan,
                     Color.Black)));
             k.Handled = true;
+            return;
+        }
+
+        // Ctrl+R: search conversation history
+        if (k == Key.R && k.IsCtrl && !k.IsAlt && !k.IsShift)
+        {
+            DismissCommandPicker();
+            ShowSearchDialog();
+            k.Handled = true;
+            return;
+        }
+
+        // Ctrl+N: new conversation
+        if (k == Key.N && k.IsCtrl && !k.IsAlt && !k.IsShift)
+        {
+            DismissCommandPicker();
+            k.Handled = true;
+            ExecuteCommand("new");
+            return;
+        }
+
+        // Ctrl+L: clear conversation
+        if (k == Key.L && k.IsCtrl && !k.IsAlt && !k.IsShift)
+        {
+            DismissCommandPicker();
+            k.Handled = true;
+            ExecuteCommand("clear");
+            return;
+        }
+
+        // Ctrl+P: command picker
+        if (k == Key.P && k.IsCtrl && !k.IsAlt && !k.IsShift)
+        {
+            if (_commandPicker == null)
+                ShowCommandPicker();
+            k.Handled = true;
+            return;
+        }
+
+        // Ctrl+T: toggle theme
+        if (k == Key.T && k.IsCtrl && !k.IsAlt && !k.IsShift)
+        {
+            DismissCommandPicker();
+            k.Handled = true;
+            ExecuteCommand("theme");
+            return;
+        }
+
+        // Ctrl+Q: exit
+        if (k == Key.Q && k.IsCtrl && !k.IsAlt && !k.IsShift)
+        {
+            k.Handled = true;
+            _app.RequestStop();
             return;
         }
 
@@ -727,7 +788,7 @@ public sealed class MainWindow : Window
                     }
                     _markdown.Text = _markdownCache.ToString();
                 }
-                _sidebarStatus.Text = "状态: 就绪";
+                _sidebarStatus.Text = cancelled ? "状态: 已取消" : "状态: 就绪";
                 RefreshStats();
             });
             if (!ct.IsCancellationRequested) await _sessionMgr.SaveSessionAsync();
@@ -761,6 +822,9 @@ public sealed class MainWindow : Window
             case "sessions":
                 ShowSessionPicker();
                 return;
+            case "search":
+                ShowSearchDialog();
+                return;
             case "retry":
                 AddMsg("System", "重发暂未实现");
                 return;
@@ -788,7 +852,7 @@ public sealed class MainWindow : Window
                 catch (Exception ex) { AddMsg("System", $"主题切换失败: {ex.Message}"); }
                 return;
             case "help":
-                AddMsg("System", "输入 `/commands` 查看全部命令\n快捷键: `Ctrl+T` TextPad · `Ctrl+Q` 退出\n`Ctrl+↑/↓` 翻阅历史 · `Shift+Enter` 换行");
+                AddMsg("System", "输入 `/commands` 查看全部命令\n快捷键: `Ctrl+N` 新建 · `Ctrl+L` 清空 · `Ctrl+P` 命令\n`Ctrl+R` 搜索 · `Ctrl+↑/↓` 翻阅历史 · `Shift+Enter` 换行");
                 return;
             case "exit":
                 _app.RequestStop();
@@ -797,6 +861,62 @@ public sealed class MainWindow : Window
                 AddMsg("System", $"未知 `/{cmd}`");
                 return;
         }
+    }
+
+    private void ShowSearchDialog()
+    {
+        var dlg = new Dialog
+        {
+            Title = "历史搜索",
+            Width = 60, Height = 18,
+            X = Pos.Center(), Y = Pos.Center(),
+        };
+
+        var searchInput = new Editor
+        {
+            X = 1, Y = 0, Width = Dim.Fill() - 2, Height = 1,
+        };
+        dlg.Add(searchInput);
+
+        var resultList = new ListView
+        {
+            X = 1, Y = 2, Width = Dim.Fill() - 2, Height = Dim.Fill() - 4,
+        };
+        dlg.Add(resultList);
+
+        var resultItems = new List<string>();
+        void DoSearch()
+        {
+            var q = (searchInput.Text ?? "").Trim().ToLowerInvariant();
+            resultItems.Clear();
+            if (q.Length > 0)
+            {
+                for (int i = 0; i < _conv.Count; i++)
+                {
+                    var lower = _conv[i].ToLowerInvariant();
+                    if (lower.Contains(q))
+                        resultItems.Add($"#{i + 1} {_conv[i][..Math.Min(_conv[i].Length, 80)]}");
+                }
+            }
+            resultList.SetSource(new System.Collections.ObjectModel.ObservableCollection<string>(resultItems));
+        };
+
+        searchInput.ContentChanged += (_, _) => DoSearch();
+        searchInput.KeyDown += (s, k) =>
+        {
+            if (k == Key.Esc) { dlg.RequestStop(); k.Handled = true; }
+        };
+        resultList.KeyDown += (s, k) =>
+        {
+            if (k == Key.Esc) { dlg.RequestStop(); k.Handled = true; }
+        };
+
+        var closeBtn = new Button { Text = "_关闭" };
+        closeBtn.Accepting += (_, _) => dlg.RequestStop();
+        dlg.AddButton(closeBtn);
+        dlg.Visible = true;
+        Add(dlg);
+        searchInput.SetFocus();
     }
 
     private void ShowSessionPicker()
@@ -935,13 +1055,13 @@ public sealed class MainWindow : Window
                 _sidebarTokens.Text = $"消息: {_conv.Count}";
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // non-critical, best-effort
+            _logger.LogDebug(ex, "RestoreSession failed");
         }
     }
 
-    private static string GetGitBranch()
+    private async Task FetchGitBranchAsync()
     {
         try
         {
@@ -951,12 +1071,24 @@ public sealed class MainWindow : Window
                 WorkingDirectory = Directory.GetCurrentDirectory(),
             };
             using var p = Process.Start(psi);
-            if (p == null) return "—";
-            p.WaitForExit(2000);
-            var branch = p.ExitCode == 0 ? p.StandardOutput.ReadToEnd().Trim() : "";
-            return string.IsNullOrEmpty(branch) ? "—" : branch;
+            if (p == null) return;
+            using var cts = new CancellationTokenSource(2000);
+            await p.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+            var branch = p.ExitCode == 0 ? (await p.StandardOutput.ReadToEndAsync().ConfigureAwait(false)).Trim() : "";
+            if (!string.IsNullOrEmpty(branch))
+            {
+                _gitBranch = branch;
+                _app.Invoke(() =>
+                {
+                    if (_gitBranchLabel != null)
+                        _gitBranchLabel.Text = $" {_gitBranch}";
+                });
+            }
         }
-        catch { return "—"; }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Git branch fetch failed");
+        }
     }
 
     protected override void Dispose(bool disposing)

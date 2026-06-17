@@ -23,6 +23,10 @@ public static class ChatMessageRenderer
     private static readonly ConcurrentQueue<long> _cacheOrder = new();
     private static readonly object _cacheLock = new();
 
+    // Code block expand/collapse state (keyed by content hash)
+    private static readonly ConcurrentDictionary<long, bool> _expandedBlocks = new();
+    private static long CodeBlockHash(string code) => ContentHash("code:" + code);
+
     private static long ContentHash(string text)
     {
         // FNV-1a 64-bit hash to minimize collisions vs string.GetHashCode()
@@ -421,15 +425,80 @@ public static class ChatMessageRenderer
 
         if (codeLines.Length > maxLines)
         {
-            codeStack.Children.Add(new TextBlock
+            var blockHash = CodeBlockHash(code);
+            var isExpanded = _expandedBlocks.GetValueOrDefault(blockHash);
+            if (isExpanded)
             {
-                Text = $"[... truncated: {codeLines.Length - maxLines} more lines]",
-                Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
-                FontFamily = LtaiTheme.CodeFont,
-                FontSize = 11,
-                FontStyle = FontStyle.Italic,
-                Margin = new(linePad * 8 + 8, 2, 0, 0)
-            });
+                // Re-render with all lines
+                for (int li = maxLines; li < codeLines.Length; li++)
+                {
+                    var lineRow = new DockPanel { Margin = new(0, 0, 0, 0) };
+                    lineRow.Children.Add(new TextBlock
+                    {
+                        Text = (li + 1).ToString().PadLeft(linePad),
+                        Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
+                        FontFamily = LtaiTheme.CodeFont,
+                        FontSize = 11,
+                        Width = 30,
+                        TextAlignment = TextAlignment.Right,
+                        Margin = new(0, 0, 8, 0),
+                    });
+                    var tb = new TextBlock { FontFamily = LtaiTheme.CodeFont, FontSize = 12, TextWrapping = TextWrapping.Wrap };
+                    var tokens = MarkdownRenderer.TokenizeLine(codeLines[li], kws);
+                    if (tokens.Count > 0)
+                        foreach (var (text, color) in tokens)
+                            tb.Inlines!.Add(new Avalonia.Controls.Documents.Run { Text = text, Foreground = LtaiTheme.Sbb(color) });
+                    else
+                        tb.Text = " ";
+                    lineRow.Children.Add(tb);
+                    codeStack.Children.Add(lineRow);
+                }
+                var collapseBtn = new Button
+                {
+                    Content = $"▲ 折叠 (共 {codeLines.Length} 行)",
+                    FontSize = 11,
+                    Background = LtaiTheme.Sbb(LtaiTheme.CodeBg),
+                    Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
+                    BorderThickness = new(0),
+                    Margin = new(linePad * 8 + 8, 2, 0, 0),
+                };
+                collapseBtn.Click += (_, _) =>
+                {
+                    _expandedBlocks.TryRemove(blockHash, out _);
+                    // Re-trigger render by removing from cache
+                    lock (_cacheLock)
+                    {
+                        foreach (var kv in _renderCache)
+                            if (kv.Value.Count > 0)
+                                _renderCache.TryRemove(kv.Key, out _);
+                    }
+                };
+                codeStack.Children.Add(collapseBtn);
+            }
+            else
+            {
+                var expandBtn = new Button
+                {
+                    Content = $"▼ 展开 {codeLines.Length - maxLines} 行",
+                    FontSize = 11,
+                    Background = LtaiTheme.Sbb(LtaiTheme.CodeBg),
+                    Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
+                    BorderThickness = new(0),
+                    Margin = new(linePad * 8 + 8, 2, 0, 0),
+                    Cursor = new Avalonia.Input.Cursor(StandardCursorType.Hand),
+                };
+                expandBtn.Click += (_, _) =>
+                {
+                    _expandedBlocks[blockHash] = true;
+                    lock (_cacheLock)
+                    {
+                        foreach (var kv in _renderCache)
+                            if (kv.Value.Count > 0)
+                                _renderCache.TryRemove(kv.Key, out _);
+                    }
+                };
+                codeStack.Children.Add(expandBtn);
+            }
         }
 
         codeBorder.Child = codeStack;

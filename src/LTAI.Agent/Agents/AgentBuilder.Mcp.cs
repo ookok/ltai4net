@@ -19,7 +19,7 @@ partial class AgentBuilder
         IReadOnlyList<AITool>? mcpTools;
         try
         {
-            mcpTools = Task.Run(() => mcpTask).GetAwaiter().GetResult();
+            mcpTools = mcpTask.GetAwaiter().GetResult();
         }
         catch
         {

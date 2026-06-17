@@ -14,6 +14,7 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using LTAI.Agent.DevUI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Execution;
@@ -32,6 +33,9 @@ public sealed class DevUISpanCollector : IDisposable
     private readonly int _maxSpans;
     private volatile bool _disposed;
     private IExecutionEngine? _subscribedEngine;
+
+    /// <summary>Kanban board for agent status visualization.</summary>
+    public AgentKanbanBoard Kanban { get; } = new();
 
     /// <summary>Number of spans collected since start.</summary>
     public int TotalSpansCollected { get; private set; }
@@ -148,6 +152,9 @@ public sealed class DevUISpanCollector : IDisposable
 
         if (span.Status == SpanStatus.Failure)
             FailedSpans++;
+
+        // Track on kanban board
+        Kanban.TrackSpan(span);
 
         // Trim to max spans
         while (_spans.Count > _maxSpans && _spans.TryDequeue(out _)) { }

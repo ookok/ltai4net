@@ -16,8 +16,6 @@ namespace LTAI.Agent.Caching;
 /// </summary>
 public sealed class NullCachingStore : IMemoryCachingStore
 {
-    private bool _disposed;
-
     public string ActiveTier => "Null";
     public int CheckpointCount => 0;
 
@@ -41,8 +39,5 @@ public sealed class NullCachingStore : IMemoryCachingStore
     public Task ClearAsync(CancellationToken ct = default)
         => Task.CompletedTask;
 
-    public void Dispose()
-    {
-        _disposed = true;
-    }
+    public void Dispose() { }
 }
