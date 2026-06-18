@@ -2,6 +2,7 @@ using LTAI.Core.Session;
 
 namespace LTAI.Desktop.Tests;
 
+[Collection("AvaloniaHeadless")]
 public sealed class SessionStatsPanelUITests 
 {
     private static SessionManager CreateSessionManager()

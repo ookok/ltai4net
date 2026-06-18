@@ -32,6 +32,7 @@ public sealed class L6AgentDiaryProvider : AIContextProvider
     {
         if (context.AIContext.IsProviderSkipped("L6AgentDiary"))
             return ValueTask.FromResult(new AIContext());
+        LookaheadProviderSelector.RecordProviderUsed("L6AgentDiary");
 
         try
         {

@@ -19,8 +19,12 @@ namespace LTAI.Desktop;
 public static class Program
 {
     [STAThread]
-    public static void Main(string[] args) =>
+    public static void Main(string[] args)
+    {
+        // ── Auto-load .env from solution root or output directory ──
+        LTAI.Core.Configuration.DotEnvLoader.Load();
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+    }
 
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>().UsePlatformDetect().LogToTrace();
@@ -76,8 +80,8 @@ public static class Program
         Log("InitializeServicesAsync started");
         var services = BuildServiceCollection();
 
-        // ⏱ 全局超时: 可配置 (LTAI_INIT_TIMEOUT_SEC, 默认 30s)
-        // 防止 ONNX 模型加载、EP 探测、或网络请求卡死初始化
+        // �?全局超时: 可配�?(LTAI_INIT_TIMEOUT_SEC, 默认 30s)
+        // 防止 ONNX 模型加载、EP 探测、或网络请求卡死初始�?
         var initTimeoutSec = int.TryParse(
             Environment.GetEnvironmentVariable("LTAI_INIT_TIMEOUT_SEC"), out var t) ? Math.Max(10, t) : 30;
         using var initCts = new CancellationTokenSource(TimeSpan.FromSeconds(initTimeoutSec));
@@ -113,7 +117,7 @@ public static class Program
                     LTAI.Core.Configuration.SecretManager.Get("SILICONFLOW_API_KEY")
                     ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY")).ConfigureAwait(false);
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Program] Balance fetch: {ex.Message}"); }
+            catch (Exception ex) { Console.Error.WriteLine($"[Program] Balance fetch: {ex.Message}"); }
         });
     }
 
@@ -151,20 +155,23 @@ public static class Program
     private static async Task InvalidateCacheAsync(LTAI.Agent.Caching.IMemoryCachingStore store, string id)
     {
         try { await store.InvalidateSessionAsync(id).ConfigureAwait(false); }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Program] InvalidateCache failed: {ex.Message}"); }
+        catch (Exception ex) { Console.Error.WriteLine($"[Program] InvalidateCache failed: {ex.Message}"); }
     }
 }
 
-public sealed class LTAIService
+public sealed class LTAIService : ILTAIService
 {
-    public ChatAgent Chat { get; }
+    public IChatService Chat { get; }
     public LTAIOptions Options { get; }
-    public IServiceProvider Services { get; }
+    public IServiceProvider? Services { get; }
 
-    public LTAIService(ChatAgent chat, IOptions<LTAIOptions> options, IServiceProvider services)
+    public LTAIService(IChatService chat, IOptions<LTAIOptions> options, IServiceProvider? services = null)
     {
         Chat = chat; Options = options.Value; Services = services;
     }
+
+    public LTAIService(ChatAgent chat, IOptions<LTAIOptions> options, IServiceProvider? services = null)
+        : this(new ChatServiceProxy(chat), options, services) { }
 
     public string Mode => Options.AI.DefaultProvider ?? "";
     public string DNAStatus => "simplified (MS Agent Framework 1.8.0)";
@@ -180,19 +187,18 @@ public sealed class LTAIService
     public double AvgLatencyMs => _requests > 0 ? (double)_totalMs / _requests : 0;
     public TimeSpan Uptime => _sessionTimer.Elapsed;
 
-    public LTAIService(ChatAgent chat, IOptions<LTAIOptions> options)
-    {
-        Chat = chat; Options = options.Value; Services = null!;
-    }
-
     public async Task<string> ChatAsync(string message, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _requests);
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var response = await Chat.ChatAsync(message, userId: null, ct: ct);
+        var response = await Chat.ChatAsync(message, ct: ct);
         sw.Stop();
         Interlocked.Add(ref _totalMs, sw.ElapsedMilliseconds);
         Interlocked.Add(ref _tokensUsed, (response?.Length ?? 0) / 4);
         return response ?? "";
     }
 }
+
+
+
+

@@ -1,29 +1,29 @@
-// Copyright (c) LTAI. All rights reserved.
-// ═══════════════════════════════════════════════════════
-//  Long2ShortTracker — token efficiency optimization for
-//  tool responses.
-//
-//  Inspired by VibeThinker-3B's Long2Short Math RL:
-//  among correct responses, shorter ones are preferred.
-//  We apply the same zero-sum brevity reward to tool outputs:
-//  each tool invocation tracks its output length,
-//  and the system learns to prefer concise-but-correct outputs.
-// ═══════════════════════════════════════════════════════
-
 using System.Collections.Concurrent;
 
 namespace LTAI.Agent.Tools;
 
-public static class Long2ShortTracker
+/// <summary>
+/// Token efficiency tracker for tool responses.
+/// Inspired by VibeThinker-3B's Long2Short Math RL:
+/// among correct responses, shorter ones are preferred.
+/// DI singleton. Replaceable for testing.
+/// </summary>
+public sealed class Long2ShortTracker
 {
-    private static readonly ConcurrentDictionary<string, ToolOutputStats> _stats = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ToolOutputStats> _stats = new(StringComparer.OrdinalIgnoreCase);
+    private const int MaxTools = 200;
 
     /// <summary>Average tokens saved via conciseness.</summary>
-    public static long TotalTokensSaved { get; private set; }
+    public long TotalTokensSaved { get; private set; }
 
     /// <summary>Record a tool's output and whether it was successful.</summary>
-    public static void RecordOutput(string toolName, string output, bool success)
+    public void RecordOutput(string toolName, string output, bool success)
     {
+        if (_stats.Count >= MaxTools && !_stats.ContainsKey(toolName))
+        {
+            var oldest = _stats.Keys.FirstOrDefault();
+            if (oldest != null) _stats.TryRemove(oldest, out _);
+        }
         var tokens = output.Length / 4;
         var stat = _stats.GetOrAdd(toolName, _ => new ToolOutputStats());
         stat.AddSample(tokens, success);
@@ -33,7 +33,7 @@ public static class Long2ShortTracker
     /// Get the average output length for a tool (successful calls only).
     /// Returns 0 if no data.
     /// </summary>
-    public static int GetAverageLength(string toolName)
+    public int GetAverageLength(string toolName)
     {
         if (_stats.TryGetValue(toolName, out var stat))
             return stat.AverageLength;
@@ -44,7 +44,7 @@ public static class Long2ShortTracker
     /// Compute the "brevity bonus" for a tool's output.
     /// Positive = shorter than average (good). Negative = longer (could be optimized).
     /// </summary>
-    public static double GetBrevityScore(string toolName, string currentOutput)
+    public double GetBrevityScore(string toolName, string currentOutput)
     {
         var avg = GetAverageLength(toolName);
         if (avg <= 0) return 0;
@@ -52,13 +52,12 @@ public static class Long2ShortTracker
         var currentTokens = currentOutput.Length / 4;
         var diff = avg - currentTokens;
 
-        // Normalize: +1.0 for 50% shorter, -1.0 for 50% longer
         if (avg == 0) return 0;
         return Math.Clamp((double)diff / avg * 2, -1.0, 1.0);
     }
 
     /// <summary>Human-readable summary.</summary>
-    public static string Summary
+    public string Summary
     {
         get
         {

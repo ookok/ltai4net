@@ -1,6 +1,7 @@
 using System.Text;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Microsoft.Extensions.Logging;
 using LTAI.Core.Commands;
 
 namespace LTAI.Desktop;
@@ -202,7 +203,7 @@ public sealed partial class ChatView : UserControl
                 _input.CaretIndex = _input.Text.Length;
             }
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ChatView] Build context failed: {ex.Message}"); }
+        catch (Exception ex) { _logger?.LogDebug(ex, "[ChatView] Build context failed"); }
     }
 
     private void ShowHelp()

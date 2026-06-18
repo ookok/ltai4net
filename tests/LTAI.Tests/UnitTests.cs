@@ -587,7 +587,7 @@ public class MultiProviderChatClientIntegrationTests
     [Fact]
     public async Task GetResponseAsync_NoProviders_ReturnsFailure()
     {
-        var router = new LTAI.AI.MultiProviderChatClient(new LTAIOptions());
+        var router = TestHelper.CreateRouter();
         var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
         Assert.Contains("failed", text, StringComparison.OrdinalIgnoreCase);
@@ -596,7 +596,7 @@ public class MultiProviderChatClientIntegrationTests
     [Fact]
     public void Register_Provider_CanBeResolved()
     {
-        var router = new LTAI.AI.MultiProviderChatClient(new LTAIOptions());
+        var router = TestHelper.CreateRouter();
         router.Register("test", new EchoChatClient("hello back"));
         Assert.Contains("test", router.RegisteredProviders);
     }
@@ -604,7 +604,7 @@ public class MultiProviderChatClientIntegrationTests
     [Fact]
     public async Task GetResponseAsync_WithProvider_Succeeds()
     {
-        var router = new LTAI.AI.MultiProviderChatClient(new LTAIOptions());
+        var router = TestHelper.CreateRouter();
         router.Register("l1", new EchoChatClient("hello back"));
         var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "say hi")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
@@ -624,7 +624,7 @@ public class MultiProviderChatClientIntegrationTests
                 PerUserTokenBudget = 200_000,
             }
         };
-        var router = new LTAI.AI.MultiProviderChatClient(opts);
+        var router = TestHelper.CreateRouter(opts);
         router.Register("secondary", new EchoChatClient("fallback ok"));
         // l1 not registered → fallback to secondary via degradation chain
         var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);

@@ -1,9 +1,11 @@
-﻿using System.ComponentModel;
+﻿using LTAI.Agent.Caching;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using LTAI.AI;
 using LTAI.Core.Configuration;
-using LTAI.Agent.Caching;
+using LTAI.Agent.Utils;
 using LTAI.Core;
 
 namespace LTAI.Agent.Tools;
@@ -11,12 +13,6 @@ namespace LTAI.Agent.Tools;
 [ToolDomain("filesystem")]
 public sealed class FileSystemTools
 {
-    private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".git", "node_modules", "bin", "obj", "dist", "build", "target",
-        ".venv", "venv", "__pycache__", ".vs", ".vscode", ".idea",
-        ".hg", ".svn", ".next", ".nuxt", ".turbo", ".vercel", ".cache"
-    };
     private const int MaxChildren = 50;
 
     private readonly string _ws;
@@ -41,15 +37,16 @@ public sealed class FileSystemTools
         string path,
         [Description("起始行号（从 1 开始，默认 1）")] int startLine = 1,
         [Description("结束行号（默认文件末尾）")] int? endLine = null,
-        [Description("最大读取字符数（0=不限，默认 10000）")] int maxChars = 10000)
+        [Description("最大读取字符数（0=不限，默认 10000）")] int maxChars = 10000,
+        CancellationToken ct = default)
     {
         try
         {
             var (fp, denied) = PathUtils.TryResolveWithPermission(_ws, path);
             if (denied != null)
-                return $"Path '{denied}' is outside workspace. Ask user to confirm, then retry.";
-            if (fp == null) return "Error: path escape";
-
+                return ToolResult.Error($"Path '{denied}' is outside workspace.");
+            if (fp == null) return ToolResult.Error("path escape");
+ 
             var fi = new FileInfo(fp);
             var totalSizeKb = fi.Length / 1024;
 
@@ -62,11 +59,11 @@ public sealed class FileSystemTools
                 int lineNum = 1;
                 int targetEnd = endLine ?? int.MaxValue;
                 int charCount = 0;
-                while (lineNum < startLine && await sr.ReadLineAsync().ConfigureAwait(false) != null)
+                while (lineNum < startLine && await sr.ReadLineAsync(ct).ConfigureAwait(false) != null)
                     lineNum++;
                 while (lineNum <= targetEnd)
                 {
-                    var line = await sr.ReadLineAsync().ConfigureAwait(false);
+                    var line = await sr.ReadLineAsync(ct).ConfigureAwait(false);
                     if (line == null) break;
                     sb.AppendLine(line);
                     charCount += line.Length + Environment.NewLine.Length;
@@ -93,7 +90,7 @@ public sealed class FileSystemTools
                 string? lineContent = null;
                 while (charCount < readLimit)
                 {
-                    lineContent = await sr.ReadLineAsync().ConfigureAwait(false);
+                    lineContent = await sr.ReadLineAsync(ct).ConfigureAwait(false);
                     if (lineContent == null) break;
                     sb.AppendLine(lineContent);
                     charCount += lineContent.Length + Environment.NewLine.Length;
@@ -113,7 +110,7 @@ public sealed class FileSystemTools
             if (sizeError != null) return sizeError;
             var content = _mmap != null
                 ? await _mmap.ReadAllTextAsync(fp).ConfigureAwait(false)
-                : await File.ReadAllTextAsync(fp).ConfigureAwait(false);
+                : await File.ReadAllTextAsync(fp, ct).ConfigureAwait(false);
             var ext2 = fi.Extension.ToLowerInvariant();
             var summary2 = DescribeDoc(content, ext2);
             var effectiveMax = maxChars > 0 ? maxChars : int.MaxValue;
@@ -123,7 +120,7 @@ public sealed class FileSystemTools
         }
         catch (Exception ex)
         {
-            return $"Error reading '{path}': {ex.GetType().Name}: {ex.Message}";
+            return ToolResult.FromException(ex, $"reading '{path}'");
         }
     }
 
@@ -166,7 +163,7 @@ public sealed class FileSystemTools
     public async Task<string> WriteFile(string path, string content)
     {
         var fp = PathUtils.SafeResolvePath(_ws, path);
-        if (fp == null) return "Error: path escape";
+            if (fp == null) return ToolResult.Error("path escape");
 
         if (_writeBuf != null)
         {
@@ -212,7 +209,93 @@ public sealed class FileSystemTools
     [Description("列出当前可用的所有工具及其用途说明。")]
     public string ListTools() => "Use the specific tool you need. Available domains: filesystem (read/write/list/copy/move/delete/search), text (edit/regex/diff), documents (word/excel/ppt/pdf), web, data, git, system, code analysis, multimedia, and more.";
 
+    // ═══════════════════════════════════════════════════════
+    //  coreutils-style aliases — well-known names for LLM
+    // ═══════════════════════════════════════════════════════
+
+    [Description("coreutils `cat` — 读取文件内容。支持行范围。\n"
+        + "适用场景：查看文件全部或部分内容、拼接多个文件内容。\n"
+        + "参数：path — 文件路径；startLine/endLine — 可选行范围。")]
+    public Task<string> cat(string path,
+        [Description("起始行号（从 1 开始）")] int startLine = 1,
+        [Description("结束行号")] int? endLine = null)
+        => ReadFileContent(path, startLine, endLine);
+
+    [Description("coreutils `head` — 读取文件前 N 行。\n"
+        + "适用场景：快速查看文件头部、预览日志开头。\n"
+        + "参数：path — 文件路径；n — 行数（默认 10）。")]
+    public Task<string> head(string path,
+        [Description("行数（默认 10）")] int n = 10)
+        => ReadFileContent(path, 1, Math.Max(1, n));
+
+    [Description("coreutils `mkdir` — 创建目录（含父目录）。\n"
+        + "适用场景：创建新目录、确保目录存在后写入文件。")]
+    public string mkdir(
+        [Description("目录路径")] string path,
+        [Description("是否递归创建父目录")] bool parents = true)
+    {
+        var fp = PathUtils.SafeResolvePath(_ws, path);
+            if (fp == null) return ToolResult.Error("path escape");
+        try
+        {
+            if (parents) Directory.CreateDirectory(fp);
+            else
+            {
+                var parent = Path.GetDirectoryName(fp);
+                if (parent != null && !Directory.Exists(parent))
+                    return ToolResult.Error($"Parent directory '{parent}' does not exist. Use parents:true");
+                Directory.CreateDirectory(fp);
+            }
+            return $"Created directory: {fp}";
+        }
+        catch (Exception ex) { return ToolResult.Error(ex.Message); }
+    }
+
+    [Description("coreutils `touch` — 更新文件时间戳或创建空文件。\n"
+        + "适用场景：创建空文件、更新文件修改时间触发重新编译。")]
+    public string touch(string path)
+    {
+        var fp = PathUtils.SafeResolvePath(_ws, path);
+            if (fp == null) return ToolResult.Error("path escape");
+        try
+        {
+            if (File.Exists(fp))
+            {
+                File.SetLastWriteTimeUtc(fp, DateTime.UtcNow);
+                return $"Updated timestamp: {Path.GetFileName(fp)}";
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(fp)!);
+            File.WriteAllBytes(fp, []);
+            return $"Created empty file: {Path.GetFileName(fp)}";
+        }
+        catch (Exception ex) { return ToolResult.Error(ex.Message); }
+    }
+
+    [Description("coreutils `find` — 按 glob 模式搜索文件。\n"
+        + "适用场景：查找所有 .cs/.ts/.py 文件、定位最近的日志文件。\n"
+        + "参数：pattern — glob 模式如 src/**/*.cs。")]
+    public string[] find(
+        [Description("Glob 模式，如 src/**/*.cs")] string pattern,
+        [Description("搜索起始目录")] string path = ".",
+        [Description("排序方式：mtime/name")] string sortBy = "mtime",
+        [Description("最大结果数")] int limit = 200)
+        => Glob(pattern, path, sortBy, limit);
+
+    [Description("coreutils `ls` — 列出目录内容。\n"
+        + "适用场景：浏览目录中的文件和子目录。\n"
+        + "参数：path — 目录路径。")]
+    public string[] ls(string path = ".") => ListFiles(path);
+
+    [Description("coreutils `stat` — 获取文件/目录详细元信息。\n"
+        + "适用场景：查看文件大小、修改时间、类型、权限。")]
+    public string stat(string path) => GetFileInfo(path);
+
     // ========== COPY / MOVE / DELETE / INFO ==========
+
+    [Description("coreutils `cp` — 复制文件或目录（同 CopyFile）。\n"
+        + "适用场景：复制代码文件、备份配置文件。\n"
+        + "参数：source — 源路径；destination — 目标路径。")]
+    public string cp(string source, string destination) => CopyFile(source, destination);
 
     [Description("复制文件或目录。用于在项目内复制代码文件、配置文件、资源文件等。\n"
         + "适用场景：复制代码文件到新位置、备份配置文件、复制目录结构。\n"
@@ -224,8 +307,8 @@ public sealed class FileSystemTools
         if (src == null) return $"Source outside workspace: '{denied}'. Set confirm=true after user approval.";
         var dst = Resolve(destination, out denied);
         if (dst == null) return $"Destination outside workspace: '{denied}'. Set confirm=true after user approval.";
-        if (!File.Exists(src) && !Directory.Exists(src)) return "Source not found";
-        if (File.Exists(dst) || Directory.Exists(dst)) return "Destination already exists";
+        if (!File.Exists(src) && !Directory.Exists(src)) return ToolResult.Error("Source not found");
+        if (File.Exists(dst) || Directory.Exists(dst)) return ToolResult.Error("Destination already exists");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
@@ -233,8 +316,11 @@ public sealed class FileSystemTools
             else File.Copy(src, dst);
             return $"Copied {Path.GetFileName(src)} -> {Path.GetFileName(dst)}";
         }
-        catch (Exception ex) { return $"Error: {ex.Message}"; }
+        catch (Exception ex) { return ToolResult.Error(ex.Message); }
     }
+
+    [Description("coreutils `mv` — 移动或重命名文件/目录（同 MoveFile）。")]
+    public string mv(string source, string destination) => MoveFile(source, destination);
 
     [Description("移动或重命名文件/目录。用于整理项目文件结构。\n"
         + "适用场景：重命名代码文件、将文件移到子目录、整理项目目录结构。\n"
@@ -246,8 +332,8 @@ public sealed class FileSystemTools
         if (src == null) return $"Source outside workspace: '{denied}'. Set confirm=true after user approval.";
         var dst = Resolve(destination, out denied);
         if (dst == null) return $"Destination outside workspace: '{denied}'. Set confirm=true after user approval.";
-        if (!File.Exists(src) && !Directory.Exists(src)) return "Source not found";
-        if (File.Exists(dst) || Directory.Exists(dst)) return "Destination already exists";
+        if (!File.Exists(src) && !Directory.Exists(src)) return ToolResult.Error("Source not found");
+        if (File.Exists(dst) || Directory.Exists(dst)) return ToolResult.Error("Destination already exists");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
@@ -255,8 +341,24 @@ public sealed class FileSystemTools
             else File.Move(src, dst);
             return $"Moved {Path.GetFileName(src)} -> {Path.GetFileName(dst)}";
         }
-        catch (Exception ex) { return $"Error: {ex.Message}"; }
+        catch (Exception ex) { return ToolResult.Error(ex.Message); }
     }
+
+    [Description("coreutils `rm` — 删除文件或目录。自动检测文件/目录类型。\n"
+        + "适用场景：删除不需要的文件或目录。\n"
+        + "参数：path — 路径；recursive — 递归删除目录（默认 false，目录必须为 true）。")]
+    public string rm(string path,
+        [Description("递归删除目录")] bool recursive = false)
+    {
+        var fp = Resolve(path, out var denied);
+            if (fp == null) return ToolResult.Error($"Path outside workspace: {denied}");
+        if (File.Exists(fp)) return DeleteFile(path);
+        if (Directory.Exists(fp)) return DeleteDirectory(path, recursive);
+        return ToolResult.Error("Path not found");
+    }
+
+    [Description("coreutils `rmdir` — 删除空目录（同 DeleteDirectory recursive:false）。")]
+    public string rmdir(string path) => DeleteDirectory(path, false);
 
     [Description("删除文件。用于清理项目中不再需要的文件。\n"
         + "适用场景：删除临时文件、清理旧的日志文件、删除废弃的代码文件。\n"
@@ -264,10 +366,10 @@ public sealed class FileSystemTools
     public string DeleteFile(string path)
     {
         var fp = Resolve(path, out var denied);
-        if (fp == null) return $"Path outside workspace: '{denied}'. Set confirm=true after user approval.";
-        if (!File.Exists(fp)) return "File not found";
+            if (fp == null) return ToolResult.Error($"Path outside workspace: {denied}");
+        if (!File.Exists(fp)) return ToolResult.Error("File not found");
         try { File.Delete(fp); return $"Deleted {Path.GetFileName(fp)}"; }
-        catch (Exception ex) { return $"Error: {ex.Message}"; }
+        catch (Exception ex) { return ToolResult.Error(ex.Message); }
     }
 
     [Description("递归删除目录及其所有内容。用于清理整个目录树。\n"
@@ -277,16 +379,16 @@ public sealed class FileSystemTools
     public string DeleteDirectory(string path, bool recursive = true)
     {
         var fp = Resolve(path, out var denied);
-        if (fp == null) return $"Path outside workspace: '{denied}'. Set confirm=true after user approval.";
-        if (!Directory.Exists(fp)) return "Directory not found";
+            if (fp == null) return ToolResult.Error($"Path outside workspace: {denied}");
+        if (!Directory.Exists(fp)) return ToolResult.Error("Directory not found");
         try
         {
             if (!recursive && Directory.GetFileSystemEntries(fp).Length > 0)
-                return "Directory not empty. Use recursive:true";
+                return ToolResult.Error("Directory not empty. Use recursive:true");
             Directory.Delete(fp, recursive);
             return $"Deleted directory {Path.GetFileName(fp)}";
         }
-        catch (Exception ex) { return $"Error: {ex.Message}"; }
+        catch (Exception ex) { return ToolResult.Error(ex.Message); }
     }
 
     [Description("获取文件或目录元信息：大小、修改时间、类型、扩展名。用于检查文件详情。\n"
@@ -296,7 +398,7 @@ public sealed class FileSystemTools
     public string GetFileInfo(string path)
     {
         var fp = Resolve(path, out var denied);
-        if (fp == null) return $"Path outside workspace: '{denied}'. Set confirm=true after user approval.";
+            if (fp == null) return ToolResult.Error($"Path outside workspace: {denied}");
         if (File.Exists(fp))
         {
             var fi = new FileInfo(fp);
@@ -304,10 +406,10 @@ public sealed class FileSystemTools
         }
         if (Directory.Exists(fp))
         {
-            var diName = new DirectoryInfo(fp).Name;
-            return $"**{diName}** -- directory\n- Items: {Directory.GetFileSystemEntries(fp).Length}\n- Modified: {Directory.GetLastWriteTimeUtc(fp):yyyy-MM-dd HH:mm:ss} UTC\n- Created: {Directory.GetCreationTimeUtc(fp):yyyy-MM-dd HH:mm:ss} UTC";
+            var dirName = Path.GetFileName(fp.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            return $"**{dirName}** -- directory\n- Items: {Directory.GetFileSystemEntries(fp).Length}\n- Modified: {Directory.GetLastWriteTimeUtc(fp):yyyy-MM-dd HH:mm:ss} UTC\n- Created: {Directory.GetCreationTimeUtc(fp):yyyy-MM-dd HH:mm:ss} UTC";
         }
-        return "Path not found";
+        return ToolResult.Error("Path not found");
     }
 
     // ========== GLOB / SEARCH FILES / DIRECTORY TREE ==========
@@ -319,7 +421,7 @@ public sealed class FileSystemTools
     public string[] Glob(string pattern, string path = ".", string sortBy = "mtime", int limit = 200, bool includeDeps = false)
     {
         var root = SafePath(path);
-        if (root == null || !Directory.Exists(root)) return ["Error: invalid path"];
+        if (root == null || !Directory.Exists(root)) return [ToolResult.Error("invalid path")];
         limit = Math.Clamp(limit, 1, 1000);
 
         var dirPart = Path.GetDirectoryName(pattern)?.Replace('\\', '/') ?? ".";
@@ -339,7 +441,7 @@ public sealed class FileSystemTools
                 if (!includeDeps)
                 {
                     var parts = rel.Split('/');
-                    if (parts.Take(parts.Length - 1).Any(p => SkipDirs.Contains(p))) continue;
+                    if (parts.Take(parts.Length - 1).Any(p => DirectoryWalker.DefaultSkipDirs.Contains(p))) continue;
                 }
                 if (regex.IsMatch(Path.GetFileName(file)))
                 {
@@ -348,7 +450,7 @@ public sealed class FileSystemTools
                 }
             }
         }
-        catch (DirectoryNotFoundException) { return [$"Directory not found: {searchRoot}"]; }
+        catch (DirectoryNotFoundException) { return [ToolResult.Error($"Directory not found: {searchRoot}")]; }
 
         if (sortBy == "name") results.Sort((a, b) => string.Compare(a.path, b.path, StringComparison.OrdinalIgnoreCase));
         else results.Sort((a, b) => b.mtime.CompareTo(a.mtime));
@@ -363,7 +465,7 @@ public sealed class FileSystemTools
     {
         var (root, denied) = PathUtils.TryResolveWithPermission(_ws, path);
         if (root == null) return $"Path outside workspace: '{denied}'. Set confirm=true after user approval.";
-        if (!Directory.Exists(root)) return "Error: Directory not found";
+            if (!Directory.Exists(root)) return ToolResult.Error("Directory not found");
         maxDepth = Math.Clamp(maxDepth, 1, 5);
         var sb = new StringBuilder();
         await BuildTreeAsync(root, "", 0, maxDepth, includeDeps, sb).ConfigureAwait(false);
@@ -394,26 +496,7 @@ public sealed class FileSystemTools
         _ => $"{bytes / 1048576.0:F1} MB"
     };
 
-    // Bounded glob→regex cache (LRU, max 256 entries — prevents ReDoS memory leak)
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Regex> _globCache = new(4, 256, StringComparer.OrdinalIgnoreCase);
-    private static readonly System.Collections.Concurrent.ConcurrentQueue<string> _globCacheOrder = new();
-    private const int GlobCacheMax = 256;
-
-    private static Regex GlobToRegex(string glob)
-    {
-        if (_globCache.TryGetValue(glob, out var cached)) return cached;
-        var p = Regex.Escape(glob).Replace(@"\*\*", ".*").Replace(@"\*", "[^/]*").Replace(@"\?", ".").Replace(@"{", "(?:").Replace(@",", "|").Replace(@"}", ")");
-        var regex = new Regex($"^{p}$", RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromMilliseconds(
-            int.TryParse(Environment.GetEnvironmentVariable("LTAI_REGEX_TIMEOUT_MS"), out var rt) ? Math.Max(100, rt) : 1000));
-        if (_globCache.TryAdd(glob, regex))
-        {
-            _globCacheOrder.Enqueue(glob);
-            // Evict oldest entries if over limit (keep ~75% = 192, evict ~25% = 64)
-            while (_globCacheOrder.Count > GlobCacheMax && _globCacheOrder.TryDequeue(out var old))
-                _globCache.TryRemove(old, out _);
-        }
-        return _globCache.TryGetValue(glob, out var r) ? r : regex;
-    }
+    private static Regex GlobToRegex(string glob) => GlobUtils.ToRegex(glob);
 
     private async Task BuildTreeAsync(string dir, string prefix, int depth, int maxDepth, bool includeDeps, StringBuilder sb)
     {
@@ -422,7 +505,7 @@ public sealed class FileSystemTools
         try { entries = Directory.GetFileSystemEntries(dir); }
         catch (UnauthorizedAccessException) { sb.AppendLine($"{prefix}[access denied]"); return; }
 
-        var visible = includeDeps ? entries.ToList() : entries.Where(e => !SkipDirs.Contains(Path.GetFileName(e))).ToList();
+        var visible = includeDeps ? entries.ToList() : entries.Where(e => !DirectoryWalker.DefaultSkipDirs.Contains(Path.GetFileName(e))).ToList();
         if (visible.Count > MaxChildren)
         {
             sb.AppendLine($"{prefix}[{visible.Count} entries]");

@@ -34,6 +34,7 @@ public sealed class L3OnDemandProvider : AIContextProvider
     {
         if (context.AIContext.IsProviderSkipped("L3OnDemand"))
             return new AIContext();
+        LookaheadProviderSelector.RecordProviderUsed("L3OnDemand");
 
         try
         {

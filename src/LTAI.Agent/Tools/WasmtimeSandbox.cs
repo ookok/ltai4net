@@ -46,20 +46,15 @@ public sealed class WasmtimeSandbox : AIContextProvider
     private readonly bool _wasmAvailable;
     // Bounded WASM module cache (max 32 modules — each can be several MB)
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Wasmtime.Module> _moduleCache = new(8, 32);
-    private static readonly int _moduleCacheMax = ReadEnvInt("LTAI_WASM_MODULE_CACHE_MAX", 32);
     private static int _moduleCount;
 
-    private static readonly int _shellTimeoutSec = ReadEnvInt("LTAI_SHELL_TIMEOUT_SEC", 30);
-    private static readonly int _wasmTimeoutSec = ReadEnvInt("LTAI_WASM_TIMEOUT_SEC", 60);
-    private static readonly int _maxOutputBytes = ReadEnvInt("LTAI_TOOL_MAX_OUTPUT_BYTES", 100 * 1024);
+    private static readonly int _moduleCacheMax = LTAI.Core.Configuration.EnvironmentConfig.WasmModuleCacheMax;
+    private static readonly int _shellTimeoutSec = LTAI.Core.Configuration.EnvironmentConfig.ShellTimeoutSec;
+    private static readonly int _wasmTimeoutSec = LTAI.Core.Configuration.EnvironmentConfig.WasmTimeoutSec;
+    private static readonly int _maxOutputBytes = LTAI.Core.Configuration.EnvironmentConfig.ToolMaxOutputBytes;
     private static readonly SemaphoreSlim _concurrencyGate = new(
-        ReadEnvInt("LTAI_WASM_CONCURRENCY", 6),
-        ReadEnvInt("LTAI_WASM_CONCURRENCY", 6));
-
-    private static int ReadEnvInt(string key, int fallback)
-    {
-        return int.TryParse(Environment.GetEnvironmentVariable(key), out var v) ? Math.Max(1, v) : fallback;
-    }
+        LTAI.Core.Configuration.EnvironmentConfig.WasmConcurrency,
+        LTAI.Core.Configuration.EnvironmentConfig.WasmConcurrency);
 
     public WasmtimeSandbox(string workspace, ILogger<WasmtimeSandbox>? logger = null)
         : base(null, null, null)
@@ -91,6 +86,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
     {
         if (context.AIContext.IsProviderSkipped("WasmtimeSandbox"))
             return ValueTask.FromResult(context.AIContext ?? new AIContext());
+        LookaheadProviderSelector.RecordProviderUsed("WasmtimeSandbox");
 
         var existing = context.AIContext;
         if (existing == null) return ValueTask.FromResult(context.AIContext!);

@@ -390,8 +390,8 @@ public class PipelineRunnerBenchmarks
         var tsParser = new LTAI.Agent.CodeAnalysis.TreeSitterParser();
 
         _runner = new PipelineRunner(
-            grammarCheck: new GrammarCheckStep(
-                tsParser: tsParser));
+            new IPipelineStep[] { new GrammarCheckStep(
+                tsParser: tsParser) });
 
         _validCode = new MessageContext("test", default);
         _validCode.ToolCalls.Add(("write", "{\"path\":\"test.cs\"}", "class Foo { }"));

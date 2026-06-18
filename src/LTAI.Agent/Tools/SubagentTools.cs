@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Diagnostics;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Agents.AI;
@@ -30,14 +31,10 @@ public sealed class SubagentTools
     private const int MaxSpawns = 10;
     private const int TotalTurnLimit = 50;
 
-    // Read-only tool name prefixes (for explore/review/security_review)
-    private static readonly HashSet<string> ReadOnlyPrefixes =
-    [
-        "Read", "Search", "Glob", "List", "Get",
-        "DirectoryTree", "Fetch", "Find", "Lookup",
-        "Ping", "Dns", "Check", "Whois", "HttpCheck",
-        "Network", "SystemInfo", "ListProcesses", "GetEnv",
-    ];
+    // Read-only tools are identified by [ReadOnlyTool] attribute on their method.
+    // The old prefix-based approach (Read/Get/List etc.) was fragile —
+    // a method named "ReadWriteSettings" would be incorrectly let through.
+    // Attribute-based matching is exact and explicit.
 
     // Tools explicitly denied for ALL subagents (prevent recursion + dangerous ops)
     private static readonly HashSet<string> DeniedTools =
@@ -428,12 +425,11 @@ public sealed class SubagentTools
         string? budgetHint;
         lock (_budgetLock)
         {
-            _spawnCount++;
+            if (_spawnCount >= MaxSpawns)
+                return $"Error: Budget exceeded: {_spawnCount} spawns (max {MaxSpawns}). " +
+                    "Use direct tools instead of spawning more subagents.";
             _totalTurns++;
             budgetHint = GetBudgetHint();
-            if (_spawnCount > MaxSpawns)
-                return ToolResult.Error($"Budget exceeded: {_spawnCount} spawns (max {MaxSpawns}). " +
-                    "Use direct tools instead of spawning more subagents.");
         }
 
         // traceId is recorded via the orchestration span
@@ -454,7 +450,7 @@ public sealed class SubagentTools
 
         try
         {
-            var capturedSpawn = Interlocked.Increment(ref _spawnCount);
+            var capturedSpawn = Interlocked.Increment(ref _spawnCount); // single source of truth
             var capturedType = type ?? "generic";
 
             var agent = new ChatClientAgent(_llm, new ChatClientAgentOptions
@@ -531,25 +527,18 @@ public sealed class SubagentTools
             var elapsed = sw.ElapsedMilliseconds;
             var resultText = messages.Count > 0 ? messages[^1].Item2 : "(no output)";
 
-            var output = JsonSerializer.Serialize(new
-            {
-                success = true,
-                output = ContentTruncator.Truncate(resultText, 8000),
-                spawnCount = capturedSpawn,
-                elapsedMs = elapsed,
-                type = capturedType,
-            });
+            var output = ContentTruncator.Truncate(resultText, 8000);
 
             OnSubagentComplete?.Invoke(capturedSpawn);
             return budgetHint != null ? $"{output}\n{budgetHint}" : output;
         }
         catch (OperationCanceledException)
         {
-            return ToolResult.Error("Subagent cancelled by user");
+            return "Error: Subagent cancelled by user";
         }
         catch (Exception ex)
         {
-            return ToolResult.FromException(ex, "Subagent failed");
+            return $"Error: Subagent failed: {ex.Message}";
         }
     }
 
@@ -560,8 +549,16 @@ public sealed class SubagentTools
             var name = t.Name ?? "";
             if (DeniedTools.Any(d => name.Equals(d, StringComparison.OrdinalIgnoreCase)))
                 return false;
-            if (readOnly && !ReadOnlyPrefixes.Any(p => name.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
-                return false;
+
+            if (readOnly)
+            {
+                // Check for [ReadOnlyTool] attribute on the underlying method
+                if (t is AIFunction func && func.UnderlyingMethod != null)
+                {
+                    return func.UnderlyingMethod.GetCustomAttribute<ReadOnlyToolAttribute>() != null;
+                }
+                return false; // unknown tool in read-only mode → deny
+            }
             return true;
         }).ToList();
     }

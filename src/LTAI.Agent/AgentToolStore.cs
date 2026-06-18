@@ -83,6 +83,29 @@ public sealed class AgentToolStore
     public IEnumerable<string> GetAgentNames() => _store.Keys;
 
     /// <summary>
+    /// Removes a tool by name from an agent's tool set. Returns true if found and removed.
+    /// </summary>
+    public bool RemoveTool(string agentName, string toolName)
+    {
+        if (!_store.TryGetValue(agentName, out var list)) return false;
+        lock (list)
+        {
+            var idx = list.FindIndex(t => string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase));
+            if (idx < 0) return false;
+            list.RemoveAt(idx);
+            return true;
+        }
+    }
+
+    /// <summary>Returns all tool names for an agent.</summary>
+    public string[] GetToolNames(string agentName)
+    {
+        if (!_store.TryGetValue(agentName, out var list)) return [];
+        lock (list)
+            return list.Select(t => t.Name ?? "").Where(n => n.Length > 0).ToArray();
+    }
+
+    /// <summary>
     /// Returns the number of tools registered for the specified agent.
     /// </summary>
     public int GetToolCount(string agentName)
@@ -93,9 +116,13 @@ public sealed class AgentToolStore
     /// Scans all <c>*.tool.json</c> files in that directory and registers them as <see cref="AITool"/> instances.
     /// If the directory does not exist or contains no valid tool definitions, the agent's tools are cleared.
     /// </summary>
+    private static readonly HashSet<string> AllowedScriptExts = new(StringComparer.OrdinalIgnoreCase)
+        { ".ps1", ".cmd", ".bat", ".sh" };
+
     public void HotReloadAgentTools(string agentName)
     {
-        var toolsDir = Path.Combine(AppContext.BaseDirectory, ".livingtree", "tools", agentName);
+        var livingTreeRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".livingtree"));
+        var toolsDir = Path.Combine(livingTreeRoot, "tools", agentName);
         var tools = new List<AITool>();
 
         if (Directory.Exists(toolsDir))
@@ -106,49 +133,52 @@ public sealed class AgentToolStore
                 {
                     var json = File.ReadAllText(file);
                     var def = JsonSerializer.Deserialize<ToolFileDefinition>(json);
-                    if (def != null && !string.IsNullOrEmpty(def.Name))
-                    {
-                        if (def.ScriptPath != null && ShellSecurity.IsBlocked(def.ScriptPath))
-                            continue;
+                    if (def == null || string.IsNullOrEmpty(def.Name) || string.IsNullOrEmpty(def.ScriptPath))
+                        continue;
 
-                        Func<string> executeScript = () =>
+                    // Security: ScriptPath must be a relative path inside .livingtree/tools/
+                    var scriptFull = Path.GetFullPath(Path.Combine(toolsDir, def.ScriptPath));
+                    if (!scriptFull.StartsWith(livingTreeRoot, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    var ext = Path.GetExtension(scriptFull);
+                    if (!AllowedScriptExts.Contains(ext))
+                        continue;
+                    if (scriptFull.Length > 260)
+                        continue;
+                    if (!File.Exists(scriptFull))
+                        continue;
+                    if (ShellSecurity.IsBlocked(scriptFull))
+                        continue;
+
+                    Func<string> executeScript = () =>
+                    {
+                        try
                         {
-                            try
+                            var startInfo = new ProcessStartInfo
                             {
-                                if (def.ScriptPath == null || !File.Exists(def.ScriptPath))
-                                    return "⚠️ 脚本文件不存在";
-                                var escapedPath = OperatingSystem.IsWindows()
-                                    ? ShellSecurity.EscapeCmdArg(def.ScriptPath)
-                                    : ShellSecurity.EscapeBashArg(def.ScriptPath);
-                                var psi = new ProcessStartInfo
-                                {
-                                    FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash",
-                                    Arguments = OperatingSystem.IsWindows()
-                                        ? $"/c \"{escapedPath}\""
-                                        : $"-c \"{escapedPath}\"",
-                                    RedirectStandardOutput = true,
-                                    RedirectStandardError = true,
-                                    UseShellExecute = false,
-                                    CreateNoWindow = true,
-                                };
-                                using var proc = new Process { StartInfo = psi };
-                                proc.Start();
-                                var outText = proc.StandardOutput.ReadToEnd();
-                                var errText = proc.StandardError.ReadToEnd();
-                                proc.WaitForExit(30000);
-                                return (outText + errText).Trim();
-                            }
-                            catch (Exception ex)
-                            {
-                                return $"❌ 脚本执行失败: {ex.Message}";
-                            }
-                        };
-                        var tool = AIFunctionFactory.Create(
-                            executeScript,
-                            def.Name,
-                            def.Description);
-                        tools.Add(tool);
-                    }
+                                FileName = scriptFull,
+                                UseShellExecute = false,
+                                CreateNoWindow = true,
+                                RedirectStandardOutput = true,
+                                RedirectStandardError = true,
+                            };
+                            using var proc = new Process { StartInfo = startInfo };
+                            proc.Start();
+                            var outText = proc.StandardOutput.ReadToEnd();
+                            var errText = proc.StandardError.ReadToEnd();
+                            proc.WaitForExit(30000);
+                            return (outText + errText).Trim();
+                        }
+                        catch (Exception ex)
+                        {
+                            return $"❌ 脚本执行失败: {ex.Message}";
+                        }
+                    };
+                    var tool = AIFunctionFactory.Create(
+                        executeScript,
+                        def.Name,
+                        def.Description);
+                    tools.Add(tool);
                 }
                 catch
                 {

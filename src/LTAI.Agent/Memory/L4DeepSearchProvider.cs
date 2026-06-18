@@ -38,6 +38,7 @@ public sealed class L4DeepSearchProvider : AIContextProvider
     {
         if (context.AIContext.IsProviderSkipped("L4DeepSearch"))
             return new AIContext();
+        LookaheadProviderSelector.RecordProviderUsed("L4DeepSearch");
 
         try
         {

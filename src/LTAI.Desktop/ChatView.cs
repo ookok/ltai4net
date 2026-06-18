@@ -4,6 +4,7 @@ using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
@@ -19,7 +20,7 @@ namespace LTAI.Desktop;
 
 public sealed partial class ChatView : UserControl, IChatRenderer
 {
-    private readonly LTAIService _svc;
+    private readonly ILTAIService _svc;
     private readonly TextBox _input;
     private readonly StackPanel _outputStack;
     private readonly ScrollViewer _scroller;
@@ -41,6 +42,7 @@ public sealed partial class ChatView : UserControl, IChatRenderer
     private readonly Border _modeBar;
     private readonly TextBlock _modeText;
     private readonly TextBlock _todoText;
+    private readonly Microsoft.Extensions.Logging.ILogger<ChatView>? _logger;
 
     private readonly Dictionary<int, string> _subSessions = new();
     private readonly Dictionary<int, Stopwatch> _subStartTimes = new();
@@ -130,11 +132,13 @@ public sealed partial class ChatView : UserControl, IChatRenderer
 
     private readonly Services.DesktopCommandService _cmdService = new();
 
-    public ChatView(LTAIService svc, SessionManager? sessionManager = null,
-        ViewModels.ChatViewModel? viewModel = null)
+    public ChatView(ILTAIService svc, SessionManager? sessionManager = null,
+        ViewModels.ChatViewModel? viewModel = null,
+        Microsoft.Extensions.Logging.ILogger<ChatView>? logger = null)
     {
         _svc = svc;
         _sessionManager = sessionManager ?? new SessionManager();
+        _logger = logger;
         _toolRenderers = LTAI.Desktop.ToolRendering.DefaultRenderers.Create();
         _snippetStore = svc?.Services?.GetService(typeof(LTAI.Agent.Snippets.SnippetStore)) as LTAI.Agent.Snippets.SnippetStore;
         SetupQuestionHandler();
@@ -261,7 +265,7 @@ public sealed partial class ChatView : UserControl, IChatRenderer
                     _ = _vm.SendCommand.ExecuteAsync(null).ContinueWith(t =>
                     {
                         if (t.IsFaulted)
-                            System.Diagnostics.Debug.WriteLine($"[ChatView] SendCommand failed: {t.Exception?.InnerException?.Message}");
+                            _logger?.LogDebug(t.Exception?.InnerException, "[ChatView] SendCommand failed");
                     }, TaskContinuationOptions.OnlyOnFaulted);
                 }
                 return;
@@ -270,7 +274,7 @@ public sealed partial class ChatView : UserControl, IChatRenderer
             else _ = SendAsync().ContinueWith(t =>
             {
                 if (t.IsFaulted)
-                    System.Diagnostics.Debug.WriteLine($"[ChatView] SendAsync failed: {t.Exception?.InnerException?.Message}");
+                    _logger?.LogDebug(t.Exception?.InnerException, "[ChatView] SendAsync failed");
             }, TaskContinuationOptions.OnlyOnFaulted);
         };
 
@@ -342,8 +346,9 @@ public sealed partial class ChatView : UserControl, IChatRenderer
                 if (_vmExitRequested != null)
                     _vm.ExitRequested -= _vmExitRequested;
             }
-            // Dispose CTS on detach
-            if (_cts != null) { _cts.Cancel(); _cts.Dispose(); _cts = null; }
+            // Dispose CTS on detach — use Interlocked.Exchange to avoid TOCTOU with SendAsync/Cancel
+            var oldCts = Interlocked.Exchange(ref _cts, null);
+            if (oldCts != null) { try { oldCts.Cancel(); } catch { } oldCts.Dispose(); }
             DetachedFromVisualTree -= detachedHandler;
         };
         DetachedFromVisualTree += detachedHandler;
@@ -356,9 +361,8 @@ public sealed partial class ChatView : UserControl, IChatRenderer
     public void Cancel()
     {
         if (_vm != null) { _vm.CancelCommand.Execute(null); return; }
-        _cts?.Cancel();
-        _cts?.Dispose();
-        _cts = null;
+        var old = Interlocked.Exchange(ref _cts, null);
+        if (old != null) { try { old.Cancel(); } catch { } old.Dispose(); }
     }
 
     private void WireViewModel()
@@ -424,11 +428,11 @@ public sealed partial class ChatView : UserControl, IChatRenderer
                 if (_vm.IsSending) return;
                 e.Handled = true;
                 _vm.Input = _input.Text ?? "";
-                    _ = _vm.SendCommand.ExecuteAsync(null).ContinueWith(t =>
-                    {
-                        if (t.IsFaulted)
-                            System.Diagnostics.Debug.WriteLine($"[ChatView] SendCommand failed: {t.Exception?.InnerException?.Message}");
-                    }, TaskContinuationOptions.OnlyOnFaulted);
+                _ = _vm.SendCommand.ExecuteAsync(null).ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                        _logger?.LogDebug(t.Exception?.InnerException, "[ChatView] SendCommand failed");
+                }, TaskContinuationOptions.OnlyOnFaulted);
                 return;
             }
             if (_isSending) return;
@@ -436,7 +440,7 @@ public sealed partial class ChatView : UserControl, IChatRenderer
             _ = SendAsync().ContinueWith(t =>
             {
                 if (t.IsFaulted)
-                    System.Diagnostics.Debug.WriteLine($"[ChatView] SendAsync failed: {t.Exception?.InnerException?.Message}");
+                    _logger?.LogDebug(t.Exception?.InnerException, "[ChatView] SendAsync failed");
             });
         }
         // Tab (input empty) → cycle agent mode

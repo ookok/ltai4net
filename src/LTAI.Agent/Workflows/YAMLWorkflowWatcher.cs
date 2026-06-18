@@ -175,11 +175,11 @@ public sealed class YAMLWorkflowWatcher : IDisposable
     {
         try
         {
-            var baseDir = LocalVersionRepo.BaseDirectory;
+            var baseDir = LocalVersionRepo.Default.BaseDirectory;
             if (!path.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase))
                 return;
             var rel = Path.GetRelativePath(baseDir, path);
-            LocalVersionRepo.Commit(rel, $"♻ Hot-reload: {Path.GetFileName(path)}");
+            LocalVersionRepo.Default.Commit(rel, $"♻ Hot-reload: {Path.GetFileName(path)}");
         }
         catch
         {

@@ -376,7 +376,7 @@ public static class ChatMessageRenderer
                 panel.Children.Add(border);
             }
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ChatMessageRenderer] RenderInlineImage: {ex.Message}"); }
+        catch (Exception ex) { Console.Error.WriteLine($"[ChatMessageRenderer] RenderInlineImage: {ex.Message}"); }
     }
 
     private static void RenderCodeBlock(StackPanel panel, string code)

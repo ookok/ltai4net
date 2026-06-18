@@ -24,6 +24,9 @@ public static class Program
 
     public static async Task Main(string[] args)
     {
+        // ── Auto-load .env from solution root or output directory ──
+        LTAI.Core.Configuration.DotEnvLoader.Load();
+
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             try
@@ -181,11 +184,14 @@ public static class Program
         try
         {
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[yellow]Windows Terminal 未找到。是否自动下载? (y/N)[/]");
+            AnsiConsole.MarkupLine("[yellow]Windows Terminal 未找到。是否自动下载? (y/N, 10秒超时自动跳过)[/]");
             AnsiConsole.MarkupLine("[grey]  下载地址: " + s_wtDownloadUrl + "[/]");
             Console.Write("> ");
-            var line = Console.ReadLine()?.Trim().ToLowerInvariant();
-            if (line != "y" && line != "yes") return false;
+            var readTask = Task.Run(() => Console.ReadLine()?.Trim().ToLowerInvariant());
+            var completedTask = await Task.WhenAny(readTask, Task.Delay(TimeSpan.FromSeconds(10))).ConfigureAwait(false);
+            if (completedTask != readTask) return false; // timeout
+            var input = await readTask.ConfigureAwait(false);
+            if (input != "y" && input != "yes") return false;
             var toolsDir = Path.Combine(AppContext.BaseDirectory, "tools", "wt");
             Directory.CreateDirectory(toolsDir);
             AnsiConsole.MarkupLine($"[green]├─ 目录: {toolsDir.EscapeMarkup()}[/]");

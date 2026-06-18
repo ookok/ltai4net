@@ -49,6 +49,6 @@ public class RetryQueueWorkerTests
     public void Constructor_WithNullQueue_Throws()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            new RetryQueueWorker(new LTAI.AI.MultiProviderChatClient(new()), null!, NullLogger<RetryQueueWorker>.Instance));
+            new RetryQueueWorker(TestHelper.CreateRouter(), null!, NullLogger<RetryQueueWorker>.Instance));
     }
 }

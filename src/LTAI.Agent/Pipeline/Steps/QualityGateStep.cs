@@ -13,7 +13,7 @@ public sealed record QualityGateResult
     public List<string> Issues { get; init; } = [];
     public bool Passed => Score >= PassThreshold;
     public int RetryCount { get; init; }
-    public static double PassThreshold = 0.6;
+    public double PassThreshold { get; init; } = 0.6;
 }
 
 public sealed class QualityGateStep : IPipelineStep

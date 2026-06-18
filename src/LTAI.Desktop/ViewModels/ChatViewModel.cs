@@ -58,15 +58,16 @@ public partial class ChatViewModel : ObservableObject
         Messages.Add(new ChatMessage("user", query));
         IsSending = true;
 
-        _cts?.Dispose();
-        _cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        // Atomically replace CTS — cancel + dispose old one, create new
+        var oldCts = Interlocked.Exchange(ref _cts, new CancellationTokenSource(TimeSpan.FromSeconds(60)));
+        if (oldCts != null) { try { oldCts.Cancel(); } catch { } oldCts.Dispose(); }
 
         var sb = new StringBuilder();
         try
         {
             await foreach (var token in _llm.ChatStreamingAsync(query, _cts.Token))
             {
-                _cts.Token.ThrowIfCancellationRequested();
+                if (_cts.Token.IsCancellationRequested) break;
                 sb.Append(token);
             }
         }
@@ -85,7 +86,9 @@ public partial class ChatViewModel : ObservableObject
         }
 
         var text = sb.ToString();
-        if (_cts.IsCancellationRequested)
+        // Capture CTS state atomically — Cancel() may have run and set _cts to null
+        var ctsSnapshot = _cts;
+        if (ctsSnapshot != null && ctsSnapshot.IsCancellationRequested)
         {
             if (text.Length > 0)
                 Messages.Add(new ChatMessage("assistant", text + "\n\n*[已取消]*"));
@@ -97,15 +100,14 @@ public partial class ChatViewModel : ObservableObject
             Messages.Add(new ChatMessage("assistant", text));
         }
 
-        _cts?.Dispose();
-        _cts = null;
+        // Cleanup the CTS we created (but not if Cancel() already took ownership)
+        Interlocked.CompareExchange(ref _cts, null, ctsSnapshot)?.Dispose();
     }
 
     [RelayCommand]
     private void Cancel()
     {
-        _cts?.Cancel();
-        _cts?.Dispose();
-        _cts = null;
+        var old = Interlocked.Exchange(ref _cts, null);
+        if (old != null) { try { old.Cancel(); } catch { } old.Dispose(); }
     }
 }

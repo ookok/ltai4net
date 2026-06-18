@@ -5,6 +5,7 @@ using LTAI.Desktop.ViewModels;
 
 namespace LTAI.Desktop.Tests;
 
+[Collection("AvaloniaHeadless")]
 public sealed class JobsViewUITests
 {
     private static (JobsView, JobsViewModel) CreateView()

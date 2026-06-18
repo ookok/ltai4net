@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Microsoft.Extensions.Logging;
 using LTAI.Agent.Memory;
 
 namespace LTAI.Desktop;
@@ -10,11 +11,14 @@ public sealed class MemoryView : UserControl
     private readonly PalaceStore? _store;
     private readonly StackPanel _listPanel;
     private readonly TextBlock _statusText;
+    private readonly Microsoft.Extensions.Logging.ILogger<MemoryView>? _logger;
     private string _currentFilter = "";
 
-    public MemoryView(PalaceStore? store = null)
+    public MemoryView(PalaceStore? store = null,
+        Microsoft.Extensions.Logging.ILogger<MemoryView>? logger = null)
     {
         _store = store;
+        _logger = logger;
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);
 
         var root = new StackPanel { Margin = new(16), Spacing = 8 };
@@ -116,6 +120,6 @@ public sealed class MemoryView : UserControl
             if (VisualRoot is Window owner)
                 await dialog.ShowDialog(owner);
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[MemoryView] {ex.Message}"); }
+        catch (Exception ex) { _logger?.LogDebug(ex, "[MemoryView] operation failed"); }
     }
 }

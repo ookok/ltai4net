@@ -21,9 +21,90 @@ namespace LTAI.Agent.Tools;
 [ToolDomain("shell")]
 public sealed class SafeShellTool
 {
+    /// <summary>Commands with POSIX-specific semantics on Windows.
+    /// Returns a warning + suggested alternative, but lets the command proceed (may fail).</summary>
+    internal static Dictionary<string, string> PlatformUnsupportedWarnings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["chmod"] = "Windows 使用 ACL 而非 POSIX 权限位。考虑使用 icacls。",
+        ["chown"] = "Windows 使用 ACL 而非 POSIX 权限位。考虑使用 icacls。",
+        ["chgrp"] = "Windows 使用 ACL 而非 POSIX 权限位。考虑使用 icacls。",
+        ["chroot"] = "Windows 无 chroot 等效机制。",
+        ["mkfifo"] = "Windows 不支持命名管道设备节点。",
+        ["mknod"] = "Windows 不支持设备节点。",
+        ["kill"] = "Windows 无 POSIX 信号机制。使用 taskkill /F /PID <id>。",
+        ["nohup"] = "Windows 无 nohup 等效。",
+        ["nice"] = "Windows 无进程优先级命令。",
+        ["ln"] = "Windows 无符号链接。考虑 mklink。",
+        ["id"] = "Windows 使用不同的用户管理 API。尝试 whoami。",
+        ["groups"] = "Windows 使用不同的用户管理 API。",
+        ["who"] = "Windows 使用不同的用户管理 API。",
+        ["logname"] = "Windows 使用不同的用户管理 API。",
+        ["sync"] = "Windows 自动同步文件系统缓存。",
+        ["shred"] = "Windows 无安全删除命令。",
+        ["stty"] = "Windows 无终端设置命令。",
+        ["tty"] = "Windows 无终端名称命令。",
+    };
+
+    /// <summary>PowerShell alias conflicts: prefix with .exe to force coreutils binary.</summary>
+    internal static Dictionary<string, string> PowerShellAliasConflicts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ls"] = "ls.exe", ["cat"] = "cat.exe", ["cp"] = "cp.exe",
+        ["mv"] = "mv.exe", ["rm"] = "rm.exe", ["pwd"] = "pwd.exe",
+        ["sort"] = "sort.exe", ["tee"] = "tee.exe", ["uptime"] = "uptime.exe",
+        ["mkdir"] = "mkdir.exe", ["rmdir"] = "rmdir.exe", ["sleep"] = "sleep.exe",
+    };
+
+    /// <summary>Apply user config overlays from appsettings.json.</summary>
+    internal static void ApplyConfig(LTAI.Core.Configuration.ShellSecurityConfig config)
+    {
+        if (config.PlatformUnsupportedWarnings.Count > 0)
+        {
+            foreach (var (k, v) in config.PlatformUnsupportedWarnings)
+                PlatformUnsupportedWarnings[k] = v;
+        }
+        if (config.PowerShellAliasConflicts.Count > 0)
+        {
+            foreach (var (k, v) in config.PowerShellAliasConflicts)
+                PowerShellAliasConflicts[k] = v;
+        }
+        if (!string.IsNullOrEmpty(config.SystemPathFallback))
+            SystemPathFallback = config.SystemPathFallback;
+    }
+
+    /// <summary>
+    /// Resolve PowerShell alias conflict: rewrite `ls -la` → `ls.exe -la`.
+    /// Only applies on Windows when coreutils IS installed.
+    /// Without coreutils, keep the original command so PowerShell falls through
+    /// to its built-in aliases (Get-ChildItem, Get-Content, etc.).
+    /// </summary>
+    internal static string ResolvePowerShellConflict(string command)
+    {
+        if (!OperatingSystem.IsWindows()) return command;
+        // No coreutils installed → don't force .exe, let PowerShell handle it
+        if (!CoreUtilsDetector.IsAvailable) return command;
+        var trimmed = command.TrimStart();
+        var firstSpace = trimmed.IndexOf(' ', StringComparison.Ordinal);
+        var cmdName = firstSpace > 0 ? trimmed[..firstSpace] : trimmed;
+        if (PowerShellAliasConflicts.TryGetValue(cmdName, out var exe))
+            return exe + trimmed[cmdName.Length..];
+        return command;
+    }
+
+    /// <summary>Check if the first command has platform-specific limitations.
+    /// Returns a warning if so (the command will still execute, may fail).</summary>
+    internal static string? CheckPlatformUnsupported(string command)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        var trimmed = command.TrimStart();
+        var firstSpace = trimmed.IndexOf(' ', StringComparison.Ordinal);
+        var cmdName = firstSpace > 0 ? trimmed[..firstSpace] : trimmed;
+        if (PlatformUnsupportedWarnings.TryGetValue(cmdName, out var reason))
+            return $"[SafeShell] `{cmdName}` — {reason} 将尝试执行（可能失败）。";
+        return null;
+    }
+
     public static string SystemPathFallback { get; set; } = @"C:\Windows\system32;C:\Windows";
-    private static readonly int _shellConcurrency =
-        int.TryParse(Environment.GetEnvironmentVariable("LTAI_SHELL_CONCURRENCY"), out var sc) ? Math.Max(1, sc) : 8;
+    private static readonly int _shellConcurrency = LTAI.Core.Configuration.EnvironmentConfig.ShellConcurrency;
     private static readonly SemaphoreSlim _concurrencyGate = new(_shellConcurrency, _shellConcurrency);
     private readonly string _ws;
     private readonly HashSet<string>? _allowList;
@@ -59,6 +140,13 @@ public sealed class SafeShellTool
         // ⚠️ 安全：ShellSecurity 统一禁止危险命令
         if (ShellSecurity.IsBlocked(command))
             return "❌ 命令包含危险操作，已阻止";
+
+        // 平台不适用命令检查（coreutils 启发）
+        var unsupported = CheckPlatformUnsupported(command);
+        if (unsupported != null) return unsupported;
+
+        // PowerShell 别名冲突解析（coreutils 启发）
+        command = ResolvePowerShellConflict(command);
 
         // 白名单检查
         if (_allowList != null)
@@ -97,9 +185,11 @@ public sealed class SafeShellTool
         // Inherit full environment, then restrict PATH and remove dangerous vars
         foreach (DictionaryEntry env in Environment.GetEnvironmentVariables())
             psi.EnvironmentVariables[env.Key.ToString()!] = env.Value?.ToString() ?? "";
-        psi.EnvironmentVariables["PATH"] = isWindows
-            ? SystemPathFallback
-            : "/usr/bin:/bin:/usr/local/bin";
+        var basePath = Environment.GetEnvironmentVariable("PATH") ?? "";
+        var safePath = isWindows
+            ? $"{basePath};{SystemPathFallback}"
+            : basePath;
+        psi.EnvironmentVariables["PATH"] = safePath;
         psi.EnvironmentVariables.Remove("LD_PRELOAD");
         psi.EnvironmentVariables.Remove("LD_LIBRARY_PATH");
         psi.EnvironmentVariables.Remove("DYLD_INSERT_LIBRARIES");

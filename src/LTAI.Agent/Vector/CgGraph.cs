@@ -486,6 +486,7 @@ public sealed class CgGraph : AIContextProvider
             _logger.LogDebug("CgGraph: skipped by LookaheadProviderSelector");
             return ctx.AIContext!;
         }
+        LookaheadProviderSelector.RecordProviderUsed("CgGraph");
 
         // Skip unless code index has been manually built (not auto-triggered
         // on first query, because TreeSitter native parser can crash on some files).

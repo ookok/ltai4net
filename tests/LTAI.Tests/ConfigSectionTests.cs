@@ -92,7 +92,7 @@ public class ConfigSectionTests
                 DefaultProvider = "test",
             }
         };
-        using var client = new MultiProviderChatClient(options);
+        using var client = TestHelper.CreateRouter(options);
         Assert.NotNull(client);
     }
 
@@ -139,7 +139,7 @@ public class ConfigSectionTests
                 DefaultProvider = null,
             }
         };
-        using var client = new MultiProviderChatClient(options);
+        using var client = TestHelper.CreateRouter(options);
         Assert.NotNull(client);
         Assert.Null(client.ActiveProvider);
     }

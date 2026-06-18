@@ -1,14 +1,12 @@
-using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LTAI.Agent.Utils;
 
 namespace LTAI.Agent.Tools.Review;
 
 public sealed class ReviewRuleEngine
 {
-    private static readonly ConcurrentDictionary<string, Regex> s_regexCache = new();
-    private static readonly ConcurrentDictionary<string, Regex> s_globCache = new();
 
     private readonly List<ReviewRule> _rules = [];
 
@@ -290,8 +288,8 @@ public sealed class ReviewRuleEngine
 
     private static Regex GetRegex(string pattern)
     {
-        return s_regexCache.GetOrAdd(pattern, p =>
-            new Regex(p, RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase));
+        return RegexCache.GetOrAdd(pattern,
+            RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase);
     }
 
     private static bool GlobMatch(string fileName, string globPattern)
@@ -299,9 +297,9 @@ public sealed class ReviewRuleEngine
         if (!globPattern.Contains('*') && !globPattern.Contains('?'))
             return fileName == globPattern;
 
-        var regex = s_globCache.GetOrAdd(globPattern, p =>
+        var regex = RegexCache.GetOrAddFactory($"rg:{globPattern}", () =>
         {
-            var escaped = "^" + Regex.Escape(p).Replace("\\*", ".*").Replace("\\?", ".") + "$";
+            var escaped = "^" + Regex.Escape(globPattern).Replace("\\*", ".*").Replace("\\?", ".") + "$";
             return new Regex(escaped, RegexOptions.Compiled | RegexOptions.IgnoreCase);
         });
         return regex.IsMatch(fileName);

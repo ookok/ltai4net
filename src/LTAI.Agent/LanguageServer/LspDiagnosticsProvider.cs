@@ -24,6 +24,7 @@ public sealed class LspDiagnosticsProvider : AIContextProvider
     {
         if (context.AIContext.IsProviderSkipped("LspDiagnosticsProvider"))
             return ValueTask.FromResult(context.AIContext ?? new AIContext());
+        LookaheadProviderSelector.RecordProviderUsed("LspDiagnosticsProvider");
 
         var ctx = context.AIContext;
         var diagnostics = _lsp.FormatDiagnostics();

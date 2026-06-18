@@ -121,7 +121,7 @@ public sealed class ChatAgent
         _lspManager = lspManager;
         _checkpointStore = checkpointStore;
         _grammarCheck = grammarCheck ?? new GrammarCheckStep(tsParser: tsParser, lspManager: lspManager);
-        _pipelineRunner = pipelineRunner ?? new PipelineRunner(grammarCheck: _grammarCheck);
+        _pipelineRunner = pipelineRunner ?? new PipelineRunner(new IPipelineStep[] { _grammarCheck });
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ChatAgent>.Instance;
 
         _complexityProFastTrack = cfg.ComplexityProFastTrack;

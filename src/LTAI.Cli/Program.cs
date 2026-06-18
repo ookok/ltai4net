@@ -7,6 +7,9 @@ partial class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        // ── Auto-load .env from solution root or output directory ──
+        LTAI.Core.Configuration.DotEnvLoader.Load();
+
         Console.Title = "LTAI CLI";
         AnsiConsole.Write(new FigletText("LTAI CLI").Color(Color.Green));
         AnsiConsole.MarkupLine("[grey]LivingTree AI — Agent Framework[/] [blue]⚡[/]");

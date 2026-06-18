@@ -27,6 +27,8 @@ public sealed class SessionManager
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
+    private readonly ILogger? _logger;
+
     /// <summary>Callback invoked when a session is deleted. Subscribers should invalidate any session-scoped caches.</summary>
     public Action<string>? OnSessionDeleted;
 
@@ -42,10 +44,11 @@ public sealed class SessionManager
 
     public SessionManager() : this(Options.Create(new LTAIOptions())) { }
 
-    public SessionManager(IOptions<LTAIOptions> options) : this(options, new JsonSessionSerializer()) { }
+    public SessionManager(IOptions<LTAIOptions> options) : this(options, new JsonSessionSerializer(), null) { }
 
-    public SessionManager(IOptions<LTAIOptions> options, ISessionSerializer serializer)
+    public SessionManager(IOptions<LTAIOptions> options, ISessionSerializer serializer, ILogger<SessionManager>? logger = null)
     {
+        _logger = logger;
         var cfg = options.Value.Session;
         _sessionsDir = Path.IsPathRooted(cfg.Path)
             ? cfg.Path
@@ -117,17 +120,17 @@ public sealed class SessionManager
             try { data = Decrypt(text); }
             catch (CryptographicException)
             {
-                Console.Error.WriteLine($"[LTAI] Session '{name}' integrity check failed (tampered or corrupted).");
+                LogWarn($"[LTAI] Session '{name}' integrity check failed (tampered or corrupted).");
                 return null;
             }
             catch (FormatException)
             {
-                Console.Error.WriteLine($"[LTAI] Session '{name}' is not valid Base64 (truncated or corrupted).");
+                LogWarn($"[LTAI] Session '{name}' is not valid Base64 (truncated or corrupted).");
                 return null;
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[LTAI] Session '{name}' decryption failed: {ex.Message}");
+                LogWarn($"[LTAI] Session '{name}' decryption failed: {ex.Message}");
                 return null;
             }
 
@@ -137,7 +140,7 @@ public sealed class SessionManager
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[LTAI] Session '{name}' deserialization failed: {ex.Message}");
+            LogError($"[LTAI] Session '{name}' deserialization failed: {ex.Message}");
             return null;
         }
     }
@@ -153,17 +156,17 @@ public sealed class SessionManager
             try { data = Decrypt(text); }
             catch (CryptographicException)
             {
-                Console.Error.WriteLine($"[LTAI] Session '{name}' integrity check failed (tampered or corrupted).");
+                LogWarn($"[LTAI] Session '{name}' integrity check failed (tampered or corrupted).");
                 return null;
             }
             catch (FormatException)
             {
-                Console.Error.WriteLine($"[LTAI] Session '{name}' is not valid Base64 (truncated or corrupted).");
+                LogWarn($"[LTAI] Session '{name}' is not valid Base64 (truncated or corrupted).");
                 return null;
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[LTAI] Session '{name}' decryption failed: {ex.Message}");
+                LogWarn($"[LTAI] Session '{name}' decryption failed: {ex.Message}");
                 return null;
             }
 
@@ -173,7 +176,7 @@ public sealed class SessionManager
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[LTAI] Session '{name}' deserialization failed: {ex.Message}");
+            LogError($"[LTAI] Session '{name}' deserialization failed: {ex.Message}");
             return null;
         }
     }
@@ -186,6 +189,187 @@ public sealed class SessionManager
         SaveMetadata(name, new SessionMeta { ParentId = parentId, Label = label });
         return name;
     }
+
+    // ═════════════════════════════════════════════════
+    //  OpenRath-inspired Session Lineage (fork/merge/graph)
+    // ═════════════════════════════════════════════════
+
+    /// <summary>
+    /// Fork the current session into a new child branch.
+    /// The child starts as an exact copy of the parent's messages
+    /// so work can diverge without affecting the parent.
+    /// Returns the child session name.
+    /// </summary>
+    public string ForkSession(string label)
+    {
+        var parentName = _currentHandle?.Name;
+        if (parentName == null)
+        {
+            var fresh = NewSession();
+            SaveMetadata(fresh.Name, new SessionMeta { Label = label });
+            return fresh.Name;
+        }
+
+        var childName = $"fork-{parentName}-{Guid.NewGuid().ToString("n")[..4]}";
+        JsonSessionHandle childHandle;
+        try
+        {
+            var parentJson = _currentHandle.SerializeToJson();
+            // Clone by re-parsing parent's JSON state
+            childHandle = new JsonSessionHandle(childName,
+                string.IsNullOrEmpty(parentJson) ? null : JsonDocument.Parse(parentJson).RootElement.Clone());
+        }
+        catch
+        {
+            // Serialization/parse failed — start with empty child
+            childHandle = new JsonSessionHandle(childName, null);
+        }
+        _currentHandle = childHandle;
+        SaveMetadata(childName, new SessionMeta { ParentId = parentName, Label = label });
+        SaveSession(childName);
+        return childName;
+    }
+
+    /// <summary>
+    /// Merge two sessions. Combines messages from both sessions into one,
+    /// separated by a merge marker. Persists as a new session.
+    /// Returns the merged session name.
+    /// </summary>
+    public string MergeSessions(string sourceName, string? label = null)
+    {
+        var target = _currentHandle;
+        if (target == null)
+        {
+            LoadSession(sourceName);
+            SaveMetadata(sourceName, new SessionMeta { Label = label ?? $"merged-{sourceName}" });
+            return sourceName;
+        }
+
+        // Build target messages from in-memory handle (not disk — handles unsaved sessions)
+        var targetMsgs = ExtractMessageObjectsFromHandle(target).ToList();
+        var sourceJson = LoadAndDecrypt(sourceName);
+        if (sourceJson == null)
+            throw new InvalidOperationException($"Source session '{sourceName}' not found");
+
+        var mergedName = $"merged-{target.Name}-{sourceName}-{Guid.NewGuid().ToString("n")[..4]}";
+
+        // Build combined messages JSON array: [target messages, merge marker, source messages]
+        var sourceMsgs = ExtractMessageObjects(JsonDocument.Parse(sourceJson).RootElement);
+        var combined = new System.Collections.Generic.List<object>(targetMsgs.Count + sourceMsgs.Count + 1);
+        combined.AddRange(targetMsgs);
+        combined.Add(new { role = "system", content = $"--- merge from {sourceName} ---" });
+        combined.AddRange(sourceMsgs);
+
+        var mergedJsonStr = JsonSerializer.Serialize(combined, _jsonOpts);
+        var mergedHandle = new JsonSessionHandle(mergedName,
+            JsonDocument.Parse(mergedJsonStr).RootElement.Clone());
+
+        _currentHandle = mergedHandle;
+        SaveMetadata(mergedName, new SessionMeta
+        {
+            ParentId = target.Name,
+            Label = label ?? $"merged: {target.Name} + {sourceName}"
+        });
+        SaveSession(mergedName);
+        return mergedName;
+    }
+
+    /// <summary>Load and decrypt a session's raw JSON string.</summary>
+    private string? LoadAndDecrypt(string name)
+    {
+        var path = SessionPath(name);
+        if (!File.Exists(path)) return null;
+        try
+        {
+            var ciphertext = File.ReadAllText(path);
+            return Decrypt(ciphertext);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Extract message JSON objects from a session JSON element.</summary>
+    private static System.Collections.Generic.List<object> ExtractMessageObjects(System.Text.Json.JsonElement state)
+    {
+        var list = new System.Collections.Generic.List<object>();
+        if (state.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var item in state.EnumerateArray())
+                list.Add(item.Clone());
+        }
+        else if (state.TryGetProperty("stateBag", out var bag))
+        {
+            foreach (var key in new[] { "InMemoryChatHistoryProvider", "ChatHistoryMemoryProvider" })
+            {
+                if (bag.TryGetProperty(key, out var provider) &&
+                    provider.TryGetProperty("messages", out var msgs) &&
+                    msgs.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (var m in msgs.EnumerateArray())
+                        list.Add(m.Clone());
+                    break;
+                }
+            }
+        }
+        return list;
+    }
+
+    /// <summary>Extract message JSON objects from the in-memory session handle.</summary>
+    private static System.Collections.Generic.List<object> ExtractMessageObjectsFromHandle(ISessionHandle handle)
+    {
+        var list = new System.Collections.Generic.List<object>();
+        foreach (var msg in handle.Messages)
+        {
+            var dict = new System.Collections.Generic.Dictionary<string, object?>
+            {
+                ["role"] = msg.Role.ToString().ToLowerInvariant(),
+                ["content"] = msg.Text ?? "",
+            };
+            list.Add(dict);
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Build a session lineage tree rooted at the given session name.
+    /// Returns a list of (name, parentId, label, depth) tuples for tree rendering.
+    /// </summary>
+    public IReadOnlyList<SessionTreeNode> GetSessionGraph(string? rootName = null)
+    {
+        var allSessions = ListSessions();
+        var metaMap = allSessions.ToDictionary(s => s.Name, s => ReadMetadata(s.Name));
+
+        // If no root specified, find sessions with no parent
+        if (rootName == null)
+        {
+            var roots = allSessions.Where(s => s.ParentId == null).ToArray();
+            if (roots.Length == 0 && allSessions.Length > 0)
+                rootName = allSessions[^1].Name; // fallback: latest session
+            else if (roots.Length > 1)
+                rootName = roots[^1].Name; // latest root
+            else if (roots.Length == 1)
+                rootName = roots[0].Name;
+            else
+                return [];
+        }
+
+        var result = new List<SessionTreeNode>();
+        BuildTree(rootName, metaMap, allSessions, 0, result);
+        return result;
+    }
+
+    private void BuildTree(string? name, Dictionary<string, SessionMeta> metaMap,
+        SessionInfo[] allSessions, int depth, List<SessionTreeNode> result)
+    {
+        if (name == null) return;
+        var meta = metaMap.TryGetValue(name, out var m) ? m : new SessionMeta();
+        result.Add(new SessionTreeNode(name, meta.ParentId, meta.Label ?? "", depth));
+
+        var children = allSessions.Where(s => s.ParentId == name).ToArray();
+        foreach (var child in children)
+            BuildTree(child.Name, metaMap, allSessions, depth + 1, result);
+    }
+
+    public sealed record SessionTreeNode(string Name, string? ParentId, string Label, int Depth);
 
     private readonly object _currentHandleLock = new();
 
@@ -273,6 +457,19 @@ public sealed class SessionManager
         public long ElapsedMs { get; init; }
     }
 
+    /// <summary>Log via ILogger when available, fall back to stderr.</summary>
+    private void LogWarn(string message)
+    {
+        if (_logger != null) _logger.LogWarning(message);
+        else Console.Error.WriteLine(message);
+    }
+
+    private void LogError(string message)
+    {
+        if (_logger != null) _logger.LogError(message);
+        else Console.Error.WriteLine(message);
+    }
+
     private string SessionPath(string name) =>
         Path.Combine(_sessionsDir, $"{name}{_serializer.FileExtension}");
 
@@ -326,11 +523,11 @@ public sealed class SessionManager
                         _keyCreatedAt = DateTime.UtcNow;
                         return;
                     }
-                    Console.Error.WriteLine("[LTAI] LTAI_ENCRYPTION_KEY is not 32 bytes. Falling back to file-based key.");
+                    LogWarn("[LTAI] LTAI_ENCRYPTION_KEY is not 32 bytes. Falling back to file-based key.");
                 }
                 catch
                 {
-                    Console.Error.WriteLine("[LTAI] LTAI_ENCRYPTION_KEY is not valid Base64. Falling back to file-based key.");
+                    LogWarn("[LTAI] LTAI_ENCRYPTION_KEY is not valid Base64. Falling back to file-based key.");
                 }
             }
 
@@ -362,8 +559,8 @@ public sealed class SessionManager
                 File.WriteAllBytes(keyFile, _encryptionKey);
                 File.WriteAllText(metaFile, _keyCreatedAt.Value.ToString("O"));
                 // Log warning: key loss = permanent session data loss
-                Console.Error.WriteLine($"[LTAI] Session encryption key generated at: {keyFile}");
-                Console.Error.WriteLine("[LTAI] WARNING: Losing this file makes ALL sessions permanently unreadable. Back it up.");
+                LogWarn($"[LTAI] Session encryption key generated at: {keyFile}");
+                LogWarn("[LTAI] WARNING: Losing this file makes ALL sessions permanently unreadable. Back it up.");
             }
         }
     }

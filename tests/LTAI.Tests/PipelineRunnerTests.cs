@@ -49,11 +49,12 @@ public sealed class PipelineRunnerTests : IDisposable
         QualityGateStep? qualityGate = null,
         RetrospectiveStep? retrospective = null)
     {
-        return new PipelineRunner(
-            grammarCheck: grammarCheck,
-            qualityGate: qualityGate,
-            doDCheck: doDCheck,
-            retrospective: retrospective);
+        var steps = new List<IPipelineStep>();
+        if (grammarCheck != null) steps.Add(grammarCheck);
+        if (doDCheck != null) steps.Add(doDCheck);
+        if (qualityGate != null) steps.Add(qualityGate);
+        if (retrospective != null) steps.Add(retrospective);
+        return TestHelper.CreateRunner(steps.ToArray());
     }
 
     [Fact]
@@ -232,7 +233,7 @@ public sealed class PipelineRunnerTests : IDisposable
     [Fact]
     public async Task NullSteps_SkipsGracefully()
     {
-        var runner = new PipelineRunner(); // all null steps
+        var runner = TestHelper.CreateRunner(); // all null steps
 
         var ctx = new MessageContext("test", CancellationToken.None);
         ctx = await runner.RunPostGenerationAsync(ctx);
@@ -244,7 +245,7 @@ public sealed class PipelineRunnerTests : IDisposable
     public async Task GrammarCheckOnPostGeneration_Works()
     {
         var (grammarCheck, dir) = CreateGrammarCheckWithDir();
-        var runner = new PipelineRunner(grammarCheck: grammarCheck);
+        var runner = TestHelper.CreateRunner(grammarCheck);
         var filePath = Path.Combine(dir, "test.cs");
         await File.WriteAllTextAsync(filePath, "public class A {}");
 
@@ -260,7 +261,7 @@ public sealed class PipelineRunnerTests : IDisposable
     public async Task GrammarCheckError_BlocksPostGeneration()
     {
         var (grammarCheck, dir) = CreateGrammarCheckWithDir();
-        var runner = new PipelineRunner(grammarCheck: grammarCheck);
+        var runner = TestHelper.CreateRunner(grammarCheck);
         var filePath = Path.Combine(dir, "test.cs");
         await File.WriteAllTextAsync(filePath, "class {");
 

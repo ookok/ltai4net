@@ -1,6 +1,25 @@
 # LTAI 4 Net — Agent 指南
 
-多 Agent 框架，基于 Microsoft Agent Framework (MAF)。3 种前端 (TUI/Desktop/Web) + CLI，19 个 agent（由 `agents/*.agent.md` 定义），本地 ONNX 嵌入，YAML 热改编排。
+多 Agent 框架，基于 Microsoft Agent Framework (MAF)。3 种前端 (TUI/Desktop/Web) + CLI，20 个 agent（由 `agents/*.agent.md` 定义），本地 ONNX 嵌入，YAML 热改编排。
+
+## ⚡ 零配置启动
+
+```bash
+# 1. 复制环境变量模板
+copy .env.example .env
+# 或:  cp .env.example .env
+
+# 2. 编辑 .env，填入 DEEPSEEK_API_KEY（或任意 LLM API Key）
+#    .env 在启动时自动加载，无需手动设置环境变量
+
+# 3. 构建并启动
+./run-tui.bat          # TUI 终端界面
+./run-web.bat          # Web API (http://localhost:5100)
+./run-desktop.bat      # 桌面应用
+dotnet run --project src\LTAI.Cli -- health  # CLI 健康检查
+```
+
+**只需一个 API Key 即可启动。** 配置默认使用 `deepseek-fast` 提供程序（DeepSeek V4 Flash），模型自动选拔 L2/L3 层。如果 `.env` 不存在，启动脚本会自动从 `.env.example` 创建模板。
 
 ## 项目结构
 
@@ -30,7 +49,7 @@
 ```csharp
 services.AddLTAICore();     // 配置、安全、日志
 services.AddLTAIAI();       // LLM 路由器、嵌入
-services.AddLTAIAgent();    // 19 agents、编排、工具
+services.AddLTAIAgent();    // 20 agents、编排、工具
 ```
 
 每个 agent 通过 `AgentDefinitionLoader.GetAgentDefinitions()` 读取 `agents/*.agent.md` 注册为 MAF keyed service。ProviderRegistry 和 ModelAutoSelector 在 DI 启动时自动初始化。
@@ -45,12 +64,27 @@ services.AddLTAIAgent();    // 19 agents、编排、工具
 
 ## Agent 定义
 
-Agent 由 `agents/*.agent.md` YAML front-matter 声明。19 个 agents：`LTAI-Chat`、`LTAI-Chat-Pro`、`LTAI-Code`、`LTAI-Data`、`LTAI-Frontend`、`LTAI-LLM`、`LTAI-Math`、`LTAI-System`、`LTAI-Writer`、`LTAI-SQL`、`LTAI-API`、`LTAI-Arch`、`LTAI-DCI`、`LTAI-Test`、`LTAI-Review`、`LTAI-Debug`、`LTAI-Security`、`LTAI-DevOps`、`LTAI-Office`。
+Agent 由 `agents/*.agent.md` YAML front-matter 声明。20 个 agents：`LTAI-Chat`、`LTAI-Chat-Pro`、`LTAI-Code`、`LTAI-Data`、`LTAI-Frontend`、`LTAI-LLM`、`LTAI-Math`、`LTAI-System`、`LTAI-Writer`、`LTAI-SQL`、`LTAI-API`、`LTAI-Arch`、`LTAI-DCI`、`LTAI-Test`、`LTAI-Review`、`LTAI-Debug`、`LTAI-Security`、`LTAI-DevOps`、`LTAI-Office`、`LTAI-Explore`。
 
 ```bash
 ltai agents list          # 一览
 ltai agents show <name>   # 详细 prompt + 工具 + 权限
 ```
+
+### FastContext 范式：委托探索
+
+`LTAI-Explore` 受微软 FastContext（arXiv 2606.14066）启发，将**仓库探索**与**任务求解**分离。主 agent 通过 `BackgroundAgents_StartTask` 或 `Explore` 子代理工具，将探索查询委托给 `LTAI-Explore`，返回紧凑的 `<final_answer>` 引用块：
+
+```
+<final_answer>
+src/router.py:42-58     # 关键逻辑
+tests/test_router.py:101-119  # 相关测试
+</final_answer>
+```
+
+**核心优势**：探索 token 不出现在主 agent 上下文窗口→ 主 agent token 可降 **~60%**。
+
+**ExploreToolSet**（`src/LTAI.Agent/Tools/ExploreToolSet.cs`）提供只读的紧凑引用工具，利用现有的 `FileSystemTools`（ReadFileContent、Glob）和 `SearchTools`（SearchContent），输出 XML 标签化的 `<citation>` / `<file-list>` / `<search-results>` 格式。`LTAI-Explore` agent 默认注册这些工具，其他 agent 可通过 `tools: [explore]` 启用。
 
 ## Prompt 架构
 
@@ -230,7 +264,7 @@ Web: GET /ltai/v1/workflows
 | `GET /health` | 完整健康检查 |
 | `GET /ready` | K8s readiness probe |
 | `GET /devui` | MAF DevUI（仅 development） |
-| `GET /ltai/v1/entities` | 19 agents LTAIAgentCard |
+| `GET /ltai/v1/entities` | 20 agents LTAIAgentCard |
 | `GET /ltai/v1/jobs` | 后台任务列表（60s 自动驱逐） |
 | `GET /ltai/v1/workflows` | 热改编排配置 |
 | `POST /ltai/v1/workflows/reload` | 重载所有编排 |

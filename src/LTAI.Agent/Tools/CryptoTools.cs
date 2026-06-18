@@ -16,7 +16,7 @@ public static class CryptoTools
         try
         {
             if (!File.Exists(path))
-                return $"File not found: {path}";
+                return ToolResult.Error($"File not found: {path}");
 
             using var stream = File.OpenRead(path);
             HashAlgorithm? hasher = algorithm.ToLowerInvariant() switch
@@ -29,7 +29,7 @@ public static class CryptoTools
             };
 
             if (hasher == null)
-                return $"Unsupported algorithm: {algorithm}. Supported: md5, sha1, sha256, sha512";
+                return ToolResult.Error($"Unsupported algorithm: {algorithm}. Supported: md5, sha1, sha256, sha512");
 
             using (hasher)
             {
@@ -40,7 +40,7 @@ public static class CryptoTools
         }
         catch (Exception ex)
         {
-            return $"Hash error: {ex.GetType().Name}: {ex.Message}";
+            return ToolResult.Error($"{ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -52,7 +52,7 @@ public static class CryptoTools
         try
         {
             if (!File.Exists(path))
-                return $"File not found: {path}";
+                return ToolResult.Error($"File not found: {path}");
 
             var data = File.ReadAllBytes(path);
             var salt = RandomNumberGenerator.GetBytes(16);
@@ -77,7 +77,7 @@ public static class CryptoTools
         }
         catch (Exception ex)
         {
-            return $"Encrypt error: {ex.GetType().Name}: {ex.Message}";
+            return ToolResult.Error($"{ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -89,11 +89,11 @@ public static class CryptoTools
         try
         {
             if (!File.Exists(path))
-                return $"File not found: {path}";
+                return ToolResult.Error($"File not found: {path}");
 
             var data = File.ReadAllBytes(path);
             if (data.Length < 44)
-                return "Invalid encrypted file format";
+                return ToolResult.Error("Invalid encrypted file format");
 
             var salt = data[..16];
             var nonce = data[16..28];
@@ -114,13 +114,25 @@ public static class CryptoTools
         }
         catch (AuthenticationTagMismatchException)
         {
-            return "Decrypt error: wrong password or corrupted file";
+            return ToolResult.Error("wrong password or corrupted file");
         }
         catch (Exception ex)
         {
-            return $"Decrypt error: {ex.GetType().Name}: {ex.Message}";
+            return ToolResult.Error($"{ex.GetType().Name}: {ex.Message}");
         }
     }
+
+    [Description("coreutils `base64` — Base64 编码/解码。decode=false 编码，decode=true 解码。\n"
+        + "适用场景：将二进制编码为文本或还原。\n"
+        + "参数：text — 编码或解码的文本；decode — false=编码, true=解码。")]
+    public static string base64(string text, bool decode = false)
+        => decode ? Base64Decode(text) : Base64Encode(text);
+
+    [Description("coreutils `sha256sum` — 计算文件 SHA256 哈希（同 HashFile algorithm:sha256）。")]
+    public static string sha256sum(string path) => HashFile(path, "sha256");
+
+    [Description("coreutils `md5sum` — 计算文件 MD5 哈希（同 HashFile algorithm:md5）。")]
+    public static string md5sum(string path) => HashFile(path, "md5");
 
     [Description("Base64 编码文本。\n"
         + "适用场景：将二进制数据编码为文本格式。\n"
@@ -133,7 +145,7 @@ public static class CryptoTools
         }
         catch (Exception ex)
         {
-            return $"Base64 encode error: {ex.Message}";
+            return ToolResult.Error($"{ex.Message}");
         }
     }
 
@@ -148,7 +160,7 @@ public static class CryptoTools
         }
         catch (Exception ex)
         {
-            return $"Base64 decode error: {ex.Message}";
+            return ToolResult.Error($"{ex.Message}");
         }
     }
 

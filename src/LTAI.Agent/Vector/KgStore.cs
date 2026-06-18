@@ -1378,11 +1378,11 @@ public sealed partial class KgStore : IDisposable
                 d.Id, d.NodeId, d.Text, d.Lang, d.Source
             }), KgStoreInternals.JsonOpts);
 
-        LocalVersionRepo.AtomicCommit(
+        LocalVersionRepo.Default.AtomicCommit(
             $"{prefix}/nodes.json", nodesJson, $"📦 KG export: {label} — {nodes.Count} nodes");
-        LocalVersionRepo.AtomicCommit(
+        LocalVersionRepo.Default.AtomicCommit(
             $"{prefix}/edges.json", edgesJson, $"📦 KG export: {label} — {edges.Count} edges");
-        return LocalVersionRepo.AtomicCommit(
+        return LocalVersionRepo.Default.AtomicCommit(
             $"{prefix}/docs.json", docsJson, $"📦 KG export: {label} — {docs.Count} docs");
     }
 

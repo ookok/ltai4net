@@ -28,11 +28,13 @@
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>
 
-  <!-- Copy runtime data (agents, models, skills, tools) to exe build/publish output -->
+  <!-- Copy runtime data (agents, models, skills, tools, config) to exe build/publish output -->
   <ItemGroup Condition="'$(IsExeProject)' == 'true'">
     <Content Include="$(MSBuildThisFileDirectory)agents\**\*" CopyToOutputDirectory="PreserveNewest" Link="agents\%(RecursiveDir)%(FileName)%(Extension)" />
     <Content Include="$(MSBuildThisFileDirectory)models\**\*" CopyToOutputDirectory="PreserveNewest" Link="models\%(RecursiveDir)%(FileName)%(Extension)" Condition="Exists('$(MSBuildThisFileDirectory)models')" />
     <Content Include="$(MSBuildThisFileDirectory)skills\**\*" CopyToOutputDirectory="PreserveNewest" Link="skills\%(RecursiveDir)%(FileName)%(Extension)" />
     <Content Include="$(MSBuildThisFileDirectory)tools\rg\rg.exe" CopyToOutputDirectory="PreserveNewest" Link="tools\rg\rg.exe" Condition="Exists('$(MSBuildThisFileDirectory)tools\rg\rg.exe')" />
+    <!-- Canonical config: root appsettings.json is the single source of truth for all exe projects -->
+    <Content Include="$(MSBuildThisFileDirectory)appsettings.json" CopyToOutputDirectory="PreserveNewest" Link="appsettings.json" Condition="Exists('$(MSBuildThisFileDirectory)appsettings.json')" />
   </ItemGroup>
 </Project>

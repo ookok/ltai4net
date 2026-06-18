@@ -4,6 +4,7 @@ using Avalonia.Media;
 
 namespace LTAI.Desktop.Tests;
 
+[Collection("AvaloniaHeadless")]
 public sealed class MarkdownRendererTests
 {
     // ─── GetKeywords ───

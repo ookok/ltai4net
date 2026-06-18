@@ -33,8 +33,7 @@ public sealed class MainWindow : Window
     private readonly SessionManager _sessionMgr;
     private readonly IServiceProvider _sp;
     private readonly List<string> _modifiedFiles = new();
-    private readonly List<string> _inputHistory = new();
-    private int _historyIndex = -1;
+    private readonly InputHistory _inputHistory = new();
     private CancellationTokenSource? _streamCts;
     private string _streamBuffer = "";
     private bool _chatStarted;
@@ -44,6 +43,8 @@ public sealed class MainWindow : Window
     private string _gitBranch = "—";
     private Label? _gitBranchLabel;
     private readonly ILogger<MainWindow> _logger;
+
+    private readonly CommandHandler _cmdHandler;
 
     private readonly FrameView _homePanel;
     private readonly View _chatPanel;
@@ -91,6 +92,16 @@ public sealed class MainWindow : Window
         Width = Dim.Fill();
         Height = Dim.Fill();
         _modelLabelText = l1ModelLabel;
+        _cmdHandler = new CommandHandler(
+            _conv, _markdownCache, _aiMsgCachePos, _modelLabelText, _sp,
+            getActiveInput: () => ActiveInput?.Text ?? "",
+            addMsg: AddMsg,
+            cancelStream: CancelStream,
+            showSessionPicker: ShowSessionPicker,
+            showSearchDialog: ShowSearchDialog,
+            handleModelCommand: HandleModelCommand,
+            handleToolCommand: HandleToolCommand,
+            requestStop: () => _app.RequestStop());
 
         // Block Terminal.Gui default Ctrl+C exit
         KeyDown += (_, k) =>
@@ -321,9 +332,12 @@ public sealed class MainWindow : Window
 
     private void NavigateHistory(int direction)
     {
-        if (_inputHistory.Count == 0) return;
-        _historyIndex = Math.Clamp(_historyIndex + direction, -1, _inputHistory.Count - 1);
-        ActiveInput.Text = _historyIndex >= 0 ? _inputHistory[_historyIndex] : "";
+        string? text;
+        if (direction < 0)
+            text = _inputHistory.Previous();
+        else
+            text = _inputHistory.Next();
+        ActiveInput.Text = text ?? "";
         ActiveInput.CaretOffset = ActiveInput.Text.Length;
     }
 
@@ -341,6 +355,7 @@ public sealed class MainWindow : Window
         ("retry",    "重试上一条"),
         ("status",   "当前状态"),
         ("theme",    "切换 Dark/Light 主题"),
+        ("tool",     "启用/禁用/列出工具"),
         ("commands", "全部命令列表"),
         ("help",     "帮助"),
         ("exit",     "退出应用"),
@@ -562,7 +577,7 @@ public sealed class MainWindow : Window
             _chatInputBar.SetFocus();
             AddMsg("You", text);
             _inputHistory.Add(text);
-            _historyIndex = -1;
+            _inputHistory.ResetIndex();
             if (_streamCts != null) CancelStream();
             _streamCts = new CancellationTokenSource();
             _ = StreamAsync(text, _streamCts.Token);
@@ -574,7 +589,7 @@ public sealed class MainWindow : Window
         _chatInputBar.Text = "";
         AddMsg("You", text);
         _inputHistory.Add(text);
-        _historyIndex = -1;
+        _inputHistory.ResetIndex();
         if (_streamCts != null) CancelStream();
         _streamCts = new CancellationTokenSource();
         _ = StreamAsync(text, _streamCts.Token);
@@ -810,103 +825,9 @@ public sealed class MainWindow : Window
 
     private void ExecuteCommand(string cmd)
     {
-        switch (cmd)
-        {
-            case "new":
-                CancelStream();
-                _conv.Clear();
-                _markdownCache.Clear();
-                _aiMsgCachePos = -1;
-                UpdateMarkdown();
-                _sidebarTokens.Text = "消息: 0";
-                return;
-            case "clear":
-                CancelStream();
-                _conv.Clear();
-                _markdownCache.Clear();
-                _aiMsgCachePos = -1;
-                UpdateMarkdown();
-                _sidebarTokens.Text = "消息: 0";
-                return;
-            case "sessions":
-                ShowSessionPicker();
-                return;
-            case "search":
-                ShowSearchDialog();
-                return;
-            case "retry":
-                AddMsg("System", "重发暂未实现");
-                return;
-            case "model":
-                HandleModelCommand();
-                return;
-            case "status":
-                AddMsg("System", $"**状态**\n- 消息数: {_conv.Count}\n- 模型: {_modelLabelText}\n- 会话: {_sessionMgr.CurrentHandle?.Name ?? "—"}\n- 工具调用: {LTAI.Core.Configuration.UsageTracker.ToolCalls}");
-                return;
-            case "commands":
-                AddMsg("System", "**可用命令**\n\n`/model` 配置模型\n`/new` 新建会话\n`/sessions` 历史会话\n`/clear` 清空对话\n`/theme` 切换主题\n`/retry` 重试\n`/status` 状态\n`/help` 帮助\n`/exit` 退出");
-                return;
-            case "theme":
-                try
-                {
-                    var themeNames = Terminal.Gui.Configuration.ThemeManager.GetThemeNames().ToList();
-                    var curTheme = Terminal.Gui.Configuration.ThemeManager.Theme;
-                    var nextTheme = themeNames.FirstOrDefault(n => n != curTheme) ?? curTheme;
-                    Terminal.Gui.Configuration.ThemeManager.Theme = nextTheme;
-                    if (!Terminal.Gui.Configuration.ConfigurationManager.IsEnabled)
-                        Terminal.Gui.Configuration.ConfigurationManager.Enable(Terminal.Gui.Configuration.ConfigLocations.None);
-                    Terminal.Gui.Configuration.ConfigurationManager.Apply();
-                    AddMsg("System", $"主题: {curTheme} → {nextTheme}");
-                }
-                catch (Exception ex) { AddMsg("System", $"主题切换失败: {ex.Message}"); }
-                return;
-            case "savings":
-                var saved = TokenSavingsTracker.TotalTokensSaved;
-                AddMsg("System", $"**Token 节省**\n- 总计节省: {saved:N0} tokens\n- 累计原始: {TokenSavingsTracker.TotalTokensNaive:N0} tokens\n- 节省比例: {TokenSavingsTracker.SavingsRatio:P1}\n- 查询次数: {TokenSavingsTracker.TotalLookups:N0}\n- 平均节省: {TokenSavingsTracker.AvgSavedPerLookup:F0}/次\n- 估算费用: ~${saved * 3e-6:F2}");
-                return;
-            case "impact":
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        var cg = _sp.GetService<CgGraph>();
-                        if (cg == null) { _app.Invoke(() => AddMsg("System", "代码图不可用")); return; }
-                        var parts = ActiveInput?.Text?.TrimStart('/').Split(' ') ?? [];
-                        var symbol = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
-                        if (string.IsNullOrWhiteSpace(symbol))
-                        {
-                            _app.Invoke(() => AddMsg("System", "用法: `/impact <符号名>` — 分析修改该符号会影响哪些代码"));
-                            return;
-                        }
-                        var result = await cg.QueryImpactAsync(symbol).ConfigureAwait(false);
-                        _app.Invoke(() => AddMsg("System", result));
-                    }
-                    catch (Exception ex) { _app.Invoke(() => AddMsg("System", $"影响分析失败: {ex.Message}")); }
-                });
-                return;
-            case "contracts":
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        var contracts = _sp.GetService<ContractRegistry>();
-                        if (contracts == null) { _app.Invoke(() => AddMsg("System", "合约注册表不可用")); return; }
-                        var summary = contracts.ToString();
-                        _app.Invoke(() => AddMsg("System", summary));
-                    }
-                    catch (Exception ex) { _app.Invoke(() => AddMsg("System", $"合约查询失败: {ex.Message}")); }
-                });
-                return;
-            case "help":
-                AddMsg("System", "输入 `/commands` 查看全部命令\n快捷键: `Ctrl+N` 新建 · `Ctrl+L` 清空 · `Ctrl+P` 命令\n`Ctrl+R` 搜索 · `Ctrl+↑/↓` 翻阅历史 · `Shift+Enter` 换行");
-                return;
-            case "exit":
-                _app.RequestStop();
-                return;
-            default:
-                AddMsg("System", $"未知 `/{cmd}`");
-                return;
-        }
+        // Delegate to extracted CommandHandler for testability
+        if (!_cmdHandler.Execute(cmd))
+            AddMsg("System", $"未知 `/{cmd}`");
     }
 
     private void ShowSearchDialog()
@@ -1042,6 +963,55 @@ public sealed class MainWindow : Window
             }
         }
         catch (Exception ex) { AddMsg("System", $"加载会话失败: {ex.Message}"); }
+    }
+
+    private void HandleToolCommand()
+    {
+        try
+        {
+            var parts = ActiveInput?.Text?.TrimStart('/').Split(' ', StringSplitOptions.RemoveEmptyEntries) ?? [];
+            if (parts.Length < 2) { AddMsg("System", "用法: `/tool list` | `/tool disable <name>` | `/tool enable <name>`"); return; }
+
+            var store = _sp.GetService<AgentToolStore>();
+            if (store == null) { AddMsg("System", "AgentToolStore 不可用"); return; }
+
+            var subCmd = parts[1].ToLowerInvariant();
+            switch (subCmd)
+            {
+                case "list":
+                {
+                    var names = store.GetAgentNames().ToArray();
+                    var sb = new StringBuilder("**可用工具 (按 agent)**\n\n");
+                    foreach (var agent in names.OrderBy(n => n))
+                    {
+                        var tools = store.GetToolNames(agent);
+                        if (tools.Length > 0)
+                            sb.AppendLine($"**{agent}**: {string.Join(", ", tools.OrderBy(t => t))}");
+                    }
+                    AddMsg("System", sb.ToString());
+                    break;
+                }
+                case "disable":
+                {
+                    if (parts.Length < 3) { AddMsg("System", "用法: `/tool disable <工具名>`"); return; }
+                    var toolName = parts[2];
+                    var removed = false;
+                    foreach (var agent in store.GetAgentNames().ToList())
+                        removed |= store.RemoveTool(agent, toolName);
+                    AddMsg("System", removed
+                        ? $"已禁用工具: {toolName}"
+                        : $"未找到工具: {toolName}");
+                    break;
+                }
+                case "enable":
+                    AddMsg("System", "启用工具需要重启应用（工具在启动时通过 AgentBuilder 注册）");
+                    break;
+                default:
+                    AddMsg("System", $"未知子命令: {subCmd}。支持: list, disable, enable");
+                    break;
+            }
+        }
+        catch (Exception ex) { AddMsg("System", $"/tool 执行失败: {ex.Message}"); }
     }
 
     private void HandleModelCommand()

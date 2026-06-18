@@ -226,6 +226,7 @@ public sealed class CodeChunkIndex : AIContextProvider
     {
         if (context.AIContext.IsProviderSkipped("CodeChunkIndex"))
             return context.AIContext!;
+        LookaheadProviderSelector.RecordProviderUsed("CodeChunkIndex");
 
         var msgs = context.AIContext?.Messages;
         if (msgs == null || !msgs.Any()) return context.AIContext!;

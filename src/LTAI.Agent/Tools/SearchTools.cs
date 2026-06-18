@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.AI;
 using LTAI.Agent.Utils;
+using static LTAI.Agent.Utils.DirectoryWalker;
 
 namespace LTAI.Agent.Tools;
 
@@ -42,7 +43,7 @@ internal static class RipgrepDetector
         }
         catch
         {
-            // non-critical, best-effort
+            Debug.WriteLine("[SearchTools] rg not found via PATH");
         }
 
         // 2. Check tools/rg/rg.exe (build target auto-downloads here)
@@ -73,7 +74,7 @@ internal static class RipgrepDetector
         }
         catch
         {
-            // non-critical, best-effort
+            Debug.WriteLine("[SearchTools] rg not found at local path");
         }
 
         return false;
@@ -91,13 +92,17 @@ public sealed class SearchTools
 {
     private readonly string _ws;
 
-    private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".git", "node_modules", "bin", "obj", "dist", "build", "target",
-        ".venv", "venv", "__pycache__", ".vs", ".vscode", ".idea", "packages"
-    };
-
     public SearchTools(string ws) => _ws = ws;
+
+    [Description("coreutils `grep` — 递归搜索文件内容。支持子串/正则匹配、上下文行、文件类型过滤。\n"
+        + "适用场景：查找函数/变量的所有引用、搜索错误消息来源。\n"
+        + "参数：pattern — 搜索模式（子串或正则）；glob — 文件类型过滤。")]
+    public Task<string> grep(
+        [Description("搜索模式（子串或正则）")] string pattern,
+        [Description("文件 glob 过滤，如 *.cs")] string glob = "*",
+        [Description("上下文行数 0-20")] int context = 0,
+        [Description("区分大小写")] bool caseSensitive = false)
+        => SearchContent(pattern, glob, context, caseSensitive);
 
     [Description("递归搜索文件内容（grep 风格）。支持子串/正则匹配、上下文行显示、文件类型过滤。\n"
         + "适用场景：查找某个函数或变量的所有引用位置、搜索日志中的特定错误模式、统计代码中某个模式的出现次数。\n"
@@ -110,27 +115,29 @@ public sealed class SearchTools
         [Description("Search pattern (substring or regex)")] string pattern,
         [Description("File glob pattern like '*.cs', '*.md'")] string glob = "*",
         [Description("Lines of context around each match (0-20)")] int context = 0,
-        [Description("Case sensitive search")] bool caseSensitive = false)
+        [Description("Case sensitive search")] bool caseSensitive = false,
+        CancellationToken ct = default)
     {
         var root = ResolvePath(".");
-        if (root == null) return "Error: Path escape";
+        if (root == null) return ToolResult.Error("Path escape");
 
         context = Math.Clamp(context, 0, 20);
 
         if (RipgrepDetector.IsAvailable)
-            return await SearchWithRgAsync(pattern, root, glob, context, caseSensitive);
+            return await SearchWithRgAsync(pattern, root, glob, context, caseSensitive, ct);
 
-        return SearchWithManaged(pattern, root, glob, context, caseSensitive);
+        return SearchWithManaged(pattern, root, glob, context, caseSensitive, ct);
     }
 
-    private async Task<string> SearchWithRgAsync(string pattern, string root, string glob, int context, bool caseSensitive)
+    private async Task<string> SearchWithRgAsync(string pattern, string root, string glob, int context, bool caseSensitive,
+        CancellationToken ct = default)
     {
         var args = new List<string> { "--json", "-n", "--no-ignore" };
         if (!caseSensitive) args.Add("-i");
         if (context > 0) { args.Add("-C"); args.Add(context.ToString()); }
         args.Add("--glob");
         args.Add(glob);
-        foreach (var d in SkipDirs) { args.Add("-g"); args.Add($"!{d}/**"); }
+        foreach (var d in DefaultSkipDirs) { args.Add("-g"); args.Add($"!{d}/**"); }
         args.Add("--"); // terminator: prevent --flag in pattern from being interpreted as options
         args.Add(pattern);
         args.Add(root);
@@ -157,7 +164,8 @@ public sealed class SearchTools
         var outTask = LimitReadAsync(proc.StandardOutput, outputSb, outBuf, maxOutputChars);
         var errTask = LimitReadAsync(proc.StandardError, errorSb, errBuf, maxOutputChars / 2);
 
-        using var searchCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var searchCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        searchCts.CancelAfter(TimeSpan.FromSeconds(30));
         try { await proc.WaitForExitAsync(searchCts.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) { proc.Kill(); }
 
@@ -167,10 +175,10 @@ public sealed class SearchTools
         if (!proc.HasExited)
         {
             proc.Kill();
-            return $"rg search timed out for '{pattern}'";
+            return ToolResult.Error($"rg search timed out for '{pattern}'");
         }
         if (proc.ExitCode > 1) // rg exit code 1 = no matches, >1 = error
-            return $"rg error (exit {proc.ExitCode}): {error.Trim()}";
+            return ToolResult.Error($"rg error (exit {proc.ExitCode}): {error.Trim()}");
 
         var sb = new StringBuilder();
         string? lastPath = null;
@@ -209,19 +217,35 @@ public sealed class SearchTools
         return $"Found {totalMatches} matches in {files.Count} files:{sb}";
     }
 
-    private string SearchWithManaged(string pattern, string root, string glob, int context, bool caseSensitive)
+    private string SearchWithManaged(string pattern, string root, string glob, int context, bool caseSensitive,
+        CancellationToken ct = default)
     {
+        // Detect if pattern is a regex (contains regex special characters)
+        var isRegex = pattern.Any(c => c is '*' or '+' or '?' or '(' or ')' or '[' or ']' or '{' or '}' or '^' or '$' or '|' or '\\');
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        Regex? regex = null;
+        if (isRegex)
+        {
+            try
+            {
+                var opts = caseSensitive ? RegexOptions.Compiled : RegexOptions.IgnoreCase | RegexOptions.Compiled;
+                regex = new Regex(pattern, opts, TimeSpan.FromSeconds(1));
+            }
+            catch
+            {
+                // Not a valid regex — fall back to substring matching
+                isRegex = false;
+            }
+        }
 
         // Phase 1: collect eligible files via efficient walker
         var files = new List<string>();
         try
         {
-            var skipDirs = SkipDirs; // ".git", "node_modules", "bin", "obj" etc.
-            foreach (var f in DirectoryWalker.Walk(root, skipDirNames: skipDirs))
+            foreach (var f in DirectoryWalker.Walk(root, skipDirNames: DefaultSkipDirs))
             {
                 if (IsBinaryExtension(Path.GetExtension(f))) continue;
-                if (glob != "*" && !FileMatchesGlob(Path.GetFileName(f), glob)) continue;
+                if (glob != "*" && !GlobUtils.IsMatch(Path.GetFileName(f), glob)) continue;
                 // Quick size check without materializing full FileInfo if possible
                 try
                 {
@@ -229,15 +253,15 @@ public sealed class SearchTools
                     if (info.Length > 1_000_000) continue;
                     if (info.Length == 0) continue;
                 }
-                catch { continue; }
+                catch { /* file stat error — skip */ }
                 files.Add(f);
             }
         }
         catch
         {
-            // non-critical, best-effort
+            Debug.WriteLine("[SearchTools] file walker enumeration error");
         }
-
+ 
         if (files.Count == 0)
             return $"No matches found for '{pattern}'\n提示：{RipgrepDetector.Suggestion}";
 
@@ -246,8 +270,9 @@ public sealed class SearchTools
         int cpuCount = Environment.ProcessorCount;
 
         var maxDop = int.TryParse(Environment.GetEnvironmentVariable("LTAI_SEARCH_MAX_DOP"), out var d) ? Math.Max(1, d) : Math.Min(cpuCount, 4);
-        Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = maxDop }, file =>
+        Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = maxDop, CancellationToken = ct }, file =>
         {
+            ct.ThrowIfCancellationRequested();
             try
             {
                 var relPath = Path.GetRelativePath(root, file).Replace('\\', '/');
@@ -255,13 +280,16 @@ public sealed class SearchTools
                 foreach (var line in File.ReadLines(file))
                 {
                     lineNum++;
-                    if (line.Contains(pattern, comparison))
+                    var matched = isRegex
+                        ? (regex?.IsMatch(line) ?? false)
+                        : line.Contains(pattern, comparison);
+                    if (matched)
                         matches.Add((relPath, lineNum, line.Trim()));
                 }
             }
             catch
             {
-                // non-critical, best-effort
+                Debug.WriteLine("[SearchTools] file read error during grep");
             }
         });
 
@@ -296,19 +324,21 @@ public sealed class SearchTools
     [ToolExample("搜索所有测试文件")]
     public string[] SearchFiles(
         [Description("Filename substring or regex pattern")] string pattern,
-        [Description("Include dependency dirs (.git, node_modules)")] bool includeDeps = false)
+        [Description("Include dependency dirs (.git, node_modules)")] bool includeDeps = false,
+        CancellationToken ct = default)
     {
         var root = ResolvePath(".");
-        if (root == null) return ["Error: Path escape"];
+        if (root == null) return [ToolResult.Error("Path escape")];
 
         var results = new ConcurrentBag<string>();
         try
         {
-            var skipDirs = includeDeps ? null : SkipDirs;
+            var skipDirs = includeDeps ? null : DefaultSkipDirs;
             var files = DirectoryWalker.WalkToArray(root, skipDirNames: skipDirs);
 
-            Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, file =>
+            Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount, CancellationToken = ct }, file =>
             {
+                ct.ThrowIfCancellationRequested();
                 try
                 {
                     var relPath = Path.GetRelativePath(root, file).Replace('\\', '/');
@@ -317,10 +347,10 @@ public sealed class SearchTools
                         results.Add(relPath);
                     }
                 }
-                catch { /* file access error — skip */ }
+                catch { Debug.WriteLine("[SearchTools] file access error in SearchFiles"); }
             });
         }
-        catch { /* directory enumeration error */ }
+        catch { Debug.WriteLine("[SearchTools] directory enumeration in SearchFiles"); }
 
         return results.OrderBy(r => r).ToArray();
     }
@@ -346,31 +376,7 @@ public sealed class SearchTools
                 if (total >= maxChars) break;
             }
         }
-        catch { /* reader closed */ }
-    }
-
-    // Bounded glob→regex cache (LRU, max 256 entries)
-    private static readonly ConcurrentDictionary<string, Regex> _globCache = new(4, 256, StringComparer.OrdinalIgnoreCase);
-    private static readonly System.Collections.Concurrent.ConcurrentQueue<string> _globCacheOrder2 = new();
-    private const int GlobCacheMax2 = 256;
-
-    private static bool FileMatchesGlob(string name, string glob)
-    {
-        if (!_globCache.TryGetValue(glob, out var regex))
-        {
-            var pattern = "^" + Regex.Escape(glob).Replace(@"\*", ".*").Replace(@"\?", ".") + "$";
-            regex = new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(
-                int.TryParse(Environment.GetEnvironmentVariable("LTAI_REGEX_TIMEOUT_MS"), out var rt) ? Math.Max(100, rt) : 1000));
-            if (_globCache.TryAdd(glob, regex))
-            {
-                _globCacheOrder2.Enqueue(glob);
-                while (_globCacheOrder2.Count > GlobCacheMax2 && _globCacheOrder2.TryDequeue(out var old))
-                    _globCache.TryRemove(old, out _);
-            }
-            if (!_globCache.TryGetValue(glob, out var r)) return regex.IsMatch(name);
-            regex = r;
-        }
-        return regex.IsMatch(name);
+        catch { Debug.WriteLine("[SearchTools] reader closed"); }
     }
 
     private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);

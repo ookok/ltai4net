@@ -41,19 +41,6 @@ namespace LTAI.Agent;
 /// </summary>
 internal static partial class AgentBuilder
 {
-    // Shared LSP manager across all agents (process-wide)
-    private static readonly LanguageServer.LspLanguageManager s_lsp = new();
-    internal static LanguageServer.LspLanguageManager GetLspManager() => s_lsp;
-
-    // Shared caches across all agents (process-wide)
-    private static readonly Caching.MmapCache s_mmapCache = new(new Caching.MmapCacheOptions
-    {
-        WatchDirectories = [Directory.GetCurrentDirectory()]
-    });
-    private static readonly Caching.MmapFileProvider s_mmapProvider = new(s_mmapCache);
-    private static readonly Caching.WriteBuffer s_writeBuf = new(mmap: s_mmapCache);
-    internal static IServiceProvider? s_serviceProvider;
-
     public static AIAgent BuildAgent(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
         string? modelId = null, float? temperature = null, float? topP = null, string[]? yamlTools = null)
@@ -61,13 +48,25 @@ internal static partial class AgentBuilder
         return BuildAgentImpl(sp, name, description, canRead, canWrite, canList, canExec, modelId, temperature, topP, null, yamlTools);
     }
 
+    private static readonly object _envLock = new();
+    private static bool _envApplied;
+
     private static void ApplyEnvironmentConfig(LTAIOptions opts)
     {
-        LTAI.Core.Configuration.UsageTracker.SetContextWindowSize(opts.AI.ContextWindowSize);
-        LTAI.Agent.Tools.RipgrepDetector.RipgrepDownloadUrl = opts.Mirrors.RipGrepUrl;
-        LTAI.Agent.Tools.SkillScriptRunner.SystemPathFallback = opts.Security.SystemPathFallback;
-        LTAI.Agent.Tools.SafeShellTool.SystemPathFallback = opts.Security.SystemPathFallback;
-        LTAI.AI.LocalEmbedder.ModelBaseUrl = opts.Mirrors.ModelBaseUrl;
+        if (_envApplied) return;
+        lock (_envLock)
+        {
+            if (_envApplied) return;
+            LTAI.Core.Configuration.UsageTracker.SetContextWindowSize(opts.AI.ContextWindowSize);
+            LTAI.Agent.Tools.RipgrepDetector.RipgrepDownloadUrl = opts.Mirrors.RipGrepUrl;
+            LTAI.Agent.Tools.SkillScriptRunner.SystemPathFallback = opts.Security.SystemPathFallback;
+            LTAI.Agent.Tools.SafeShellTool.SystemPathFallback = opts.Security.SystemPathFallback;
+            LTAI.Agent.Tools.ShellSecurity.ApplyConfig(opts.Security);
+            LTAI.Agent.Tools.SafeShellTool.ApplyConfig(opts.Security);
+            EnvironmentConfig.Overrides = opts.EnvOverrides;
+            LTAI.AI.LocalEmbedder.ModelBaseUrl = opts.Mirrors.ModelBaseUrl;
+            _envApplied = true;
+        }
     }
 
     public static AIAgent BuildAgentImpl(IServiceProvider sp, string name, string description,
@@ -78,9 +77,6 @@ internal static partial class AgentBuilder
         var ws = Directory.GetCurrentDirectory();
         var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
         var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
-
-        // Expose service provider for cross-cutting tool wiring (e.g. PatchEditTool dry-run)
-        s_serviceProvider = sp;
 
         // Wire PlanTools to ExecutionEngine for integrated plan execution
         if (LTAI.Agent.Tools.PlanTools.ExecutionEngine == null)
@@ -95,6 +91,22 @@ internal static partial class AgentBuilder
                     queryClassifier: queryClassifier);
             }
             catch { /* ExecutionEngine not available — PlanTools runs standalone */ }
+        }
+
+        // Wire DI singleton to AgentModeObserver.Default (P11)
+        var observer = sp.GetService<LTAI.Agent.Tooling.AgentModeObserver>();
+        if (observer != null) LTAI.Agent.Tooling.AgentModeObserver.Default = observer;
+
+        // Wire bounded stores for session state (P6)
+        if (LTAI.Agent.Tools.PlanTools.Store == null)
+        {
+            var planStore = sp.GetService<LTAI.Agent.Tools.PlanStore>();
+            if (planStore != null) LTAI.Agent.Tools.PlanTools.Store = planStore;
+        }
+        if (LTAI.Agent.Tools.TaskTools.Store == null)
+        {
+            var taskStore = sp.GetService<LTAI.Agent.Tools.TaskStore>();
+            if (taskStore != null) LTAI.Agent.Tools.TaskTools.Store = taskStore;
         }
         var llm = sp.GetRequiredService<IChatClient>();
         var log = loggerFactory.CreateLogger("Agent." + name);
@@ -129,10 +141,13 @@ internal static partial class AgentBuilder
 
         var tools = new ToolSet();
         var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+        var mmapProvider = sp.GetService<Caching.MmapFileProvider>();
+        var writeBuf = sp.GetService<Caching.WriteBuffer>();
+        var lspManager = sp.GetRequiredService<LanguageServer.LspLanguageManager>();
 
-        RegisterFileAndTextTools(tools, name, canRead, canWrite, canList, canExec, ws,
-            canRead ? s_mmapProvider : null, canWrite ? s_writeBuf : null);
-        RegisterSearchAndCodeAnalysisTools(tools, name, canRead, ws, yamlTools);
+        RegisterFileAndTextTools(tools, name, canRead, canWrite, canList, canExec, ws, sp,
+            mmapProvider, writeBuf);
+        RegisterSearchAndCodeAnalysisTools(tools, name, canRead, ws, yamlTools, sp);
         RegisterWebTools(tools, name, httpFactory, yamlTools);
         RegisterMultimediaTools(tools, canRead, canExec, ws, yamlTools);
         RegisterDocumentTools(tools, canRead, canWrite, ws, sp, yamlTools);
@@ -140,13 +155,18 @@ internal static partial class AgentBuilder
         RegisterGitTools(tools, name, ws, yamlTools);
         // RegisterReviewTools moved below — needs palaceStore
         RegisterSkillBankTools(tools, name, yamlTools);
-        RegisterLspTools(tools, name, yamlTools);
+        RegisterLspTools(tools, name, yamlTools, lspManager);
         RegisterTaskTools(tools, name, yamlTools);
         RegisterIntegrationTools(tools, name, httpFactory, yamlTools);
         RegisterSystemAndJobTools(tools, name, canExec, canRead, canWrite, ws, sp, yamlTools);
         RegisterWorkflowTools(tools, name, sp, yamlTools);
         RegisterClusterAndDeepenTools(tools, name, sp);
         RegisterNewDomainTools(tools, name, canExec, canRead, canWrite, ws, sp, yamlTools);
+        RegisterExploreTools(tools, name, ws);
+        RegisterTextProcessingTools(tools, name, canRead);
+        RegisterDelegationTools(tools, name, sp);
+        RegisterSessionLineageTools(tools, name, sp);
+        RegisterBuildAndPublishTools(tools, name, ws, canExec);
 
         // EIA tools — in optional LTAI.Agent.Eia project (modularized)
 
@@ -229,9 +249,9 @@ internal static partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create((Func<string, string, string, Task<string>>)(LTAI.Agent.Tools.PlanTools.SubmitPlan)));
             tools.Add(AIFunctionFactory.Create((Func<Task<string>>)(LTAI.Agent.Tools.PlanTools.ApprovePlan)));
             tools.Add(AIFunctionFactory.Create(LTAI.Agent.Tools.PlanTools.PlanStatus));
-            if (canRead)
+            if (canRead && mmapProvider != null)
             {
-                var planFs = new FileSystemTools(ws, s_mmapProvider, s_writeBuf);
+                var planFs = new FileSystemTools(ws, mmapProvider, writeBuf);
                 tools.Add(AIFunctionFactory.Create((string path) => planFs.ReadFileContent(path), "ReadFileContent", "Read a file"));
                 tools.Add(AIFunctionFactory.Create(planFs.Glob));
                 tools.Add(AIFunctionFactory.Create(planFs.ListFiles));

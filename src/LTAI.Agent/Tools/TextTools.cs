@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
@@ -16,24 +16,24 @@ public sealed class TextTools
 
     // ========== EDIT FILE ==========
 
-    [Description("在文件中执行 SEARCH/REPLACE 精确文本替换。SEARCH 必须唯一匹配，否则拒绝执行。\n"
-        + "适用场景：修改单个文件中的代码片段、重命名局部变量、修改配置值、修复代码 bug。\n"
-        + "不适用场景：跨文件批量编辑（请用 MultiEdit）、创建新文件（请用 WriteFile）、正则替换（请用 RegexTest 确认模式后再手动编辑）。\n"
-        + "关键参数：path — 文件路径；search — 要搜索的精确文本；replace — 替换后的文本。")]
+    [Description("���ļ���ִ�� SEARCH/REPLACE ��ȷ�ı��滻��SEARCH ����Ψһƥ�䣬����ܾ�ִ�С�\n"
+        + "���ó������޸ĵ����ļ��еĴ���Ƭ�Ρ��������ֲ��������޸�����ֵ���޸����� bug��\n"
+        + "�����ó��������ļ������༭������ MultiEdit�����������ļ������� WriteFile���������滻������ RegexTest ȷ��ģʽ�����ֶ��༭����\n"
+        + "�ؼ�������path �� �ļ�·����search �� Ҫ�����ľ�ȷ�ı���replace �� �滻����ı���")]
     public async Task<string> EditFile(string path, string search, string replace)
     {
         var fp = SafePath(path);
-        if (fp == null) return "Error: path escape";
-        if (!File.Exists(fp)) return "File not found";
+        if (fp == null) return ToolResult.Error("path escape");
+        if (!File.Exists(fp)) return ToolResult.Error("File not found");
         var sizeError = PathUtils.CheckFileSize(fp);
-        if (sizeError != null) return sizeError;
+        if (sizeError != null) return ToolResult.Error(sizeError);
 
         var content = await File.ReadAllTextAsync(fp).ConfigureAwait(false);
         var first = content.IndexOf(search, StringComparison.Ordinal);
         var last = content.LastIndexOf(search, StringComparison.Ordinal);
 
-        if (first == -1) return "Error: SEARCH text not found in file";
-        if (first != last) return $"Error: SEARCH text appears {CountOccurrences(content, search)} times. Use MultiEdit with force:true for ambiguous matches.";
+        if (first == -1) return ToolResult.Error("SEARCH text not found in file");
+        if (first != last) return ToolResult.Error($"SEARCH text appears {CountOccurrences(content, search)} times. Use MultiEdit with force:true for ambiguous matches.");
 
         var newContent = content[..first] + replace + content[(first + search.Length)..];
         await AtomicWriteAsync(fp, newContent).ConfigureAwait(false);
@@ -42,40 +42,34 @@ public sealed class TextTools
 
     // ========== MULTI EDIT ==========
 
-    [Description("在多个文件中批量应用 SEARCH/REPLACE 编辑，原子提交（验证全部通过后才写入）。失败时自动回滚。\n"
-        + "适用场景：跨文件重命名变量/函数、批量修改多个文件中的相同模式、大规模代码重构。\n"
-        + "不适用场景：只改一个文件（请用 EditFile）、创建新文件（请用 WriteFile）。\n"
-        + "关键参数：editsJson — SEARCH/REPLACE 编辑数组 JSON：[{path, search, replace}, ...]；force — 跳过唯一性校验。")]
+    [Description("�ڶ���ļ�������Ӧ�� SEARCH/REPLACE �༭��ԭ���ύ����֤ȫ��ͨ�����д�룩��ʧ��ʱ�Զ��ع���\n"
+        + "���ó��������ļ�����������/�����������޸Ķ���ļ��е���ͬģʽ�����ģ�����ع���\n"
+        + "�����ó�����ֻ��һ���ļ������� EditFile�����������ļ������� WriteFile����\n"
+        + "�ؼ�������editsJson �� SEARCH/REPLACE �༭���� JSON��[{path, search, replace}, ...]��force �� ����Ψһ��У�顣")]
     public async Task<string> MultiEdit(string editsJson, bool force = false)
     {
         EditSpec[] edits;
         try { edits = JsonSerializer.Deserialize<EditSpec[]>(editsJson) ?? []; }
-        catch (JsonException ex) { return $"Error: Invalid JSON -- {ex.Message}"; }
-        if (edits.Length == 0) return "Error: No edits provided";
+        catch (JsonException ex) { return ToolResult.Error($"Invalid JSON -- {ex.Message}"); }
+        if (edits.Length == 0) return ToolResult.Error("No edits provided");
 
         var prepared = new List<(string path, string original, string updated)>();
         foreach (var edit in edits)
         {
             var fp = SafePath(edit.Path);
-            if (fp == null) return $"Error: Path escape -- '{edit.Path}'";
-            if (!File.Exists(fp)) return $"Error: File not found -- '{edit.Path}'";
+            if (fp == null) return ToolResult.Error($"Path escape -- '{edit.Path}'");
+            if (!File.Exists(fp)) return ToolResult.Error($"File not found -- '{edit.Path}'");
             var sizeError = PathUtils.CheckFileSize(fp);
-            if (sizeError != null) return sizeError;
+            if (sizeError != null) return ToolResult.Error(sizeError);
 
             var content = await File.ReadAllTextAsync(fp).ConfigureAwait(false);
-            int idx = force ? content.IndexOf(edit.Search, StringComparison.Ordinal) :
-                content.IndexOf(edit.Search, StringComparison.Ordinal);
-            if (idx == -1) return $"Error: SEARCH not found in '{edit.Path}'";
+            int idx = content.IndexOf(edit.Search, StringComparison.Ordinal);
+            if (idx == -1) return ToolResult.Error($"SEARCH not found in '{edit.Path}'");
             if (!force)
             {
                 var last = content.LastIndexOf(edit.Search, StringComparison.Ordinal);
-                if (idx != last)  // Use the local variable `first` — already computed above
-                {
-                    // Recompute first outside the else block logic
-                    var f = content.IndexOf(edit.Search, StringComparison.Ordinal);
-                    var l = content.LastIndexOf(edit.Search, StringComparison.Ordinal);
-                    if (f != l) return $"Error: SEARCH not unique in '{edit.Path}'. Use force:true for first-match.";
-                }
+                if (idx != last)
+                    return ToolResult.Error($"SEARCH not unique in '{edit.Path}'. Use force:true for first-match.");
             }
             var updated = content[..idx] + edit.Replace + content[(idx + edit.Search.Length)..];
             prepared.Add((fp, content, updated));
@@ -97,15 +91,15 @@ public sealed class TextTools
             // Rollback: atomic write with original content
             foreach (var (fp, original, _) in prepared)
                 if (applied.Contains(fp)) await AtomicWriteAsync(fp, original).ConfigureAwait(false);
-            return $"Error during write: {ex.Message}. Rolled back {applied.Count} file(s).";
+            return ToolResult.Error($"{ex.Message}. Rolled back {applied.Count} file(s).");
         }
     }
 
     // ========== REGEX TEST ==========
 
-    [Description("测试正则表达式匹配。返回匹配结果列表，包含每个匹配的位置和分组。\n"
-        + "适用场景：调试正则表达式、验证字符串模式、提取匹配内容、确认正则后再用于 EditFile/MultiEdit。\n"
-        + "关键参数：pattern — 正则表达式；input — 要匹配的字符串；options — 可选如 IgnoreCase,Multiline,Singleline。")]
+    [Description("����������ʽƥ�䡣����ƥ�����б������ÿ��ƥ���λ�úͷ��顣\n"
+        + "���ó���������������ʽ����֤�ַ���ģʽ����ȡƥ�����ݡ�ȷ������������� EditFile/MultiEdit��\n"
+        + "�ؼ�������pattern �� ������ʽ��input �� Ҫƥ����ַ�����options �� ��ѡ�� IgnoreCase,Multiline,Singleline��")]
     public static string RegexTest(string pattern, string input, string? options = null)
     {
         try
@@ -143,27 +137,27 @@ public sealed class TextTools
         }
         catch (Exception ex)
         {
-            return $"Regex error: {ex.Message}";
+            return ToolResult.Error($"{ex.Message}");
         }
     }
 
     // ========== APPLY UNIFIED DIFF ==========
 
-    [Description("将 unified diff 补丁应用到文件。支持标准 diff -u 格式、git diff 输出。\n"
-        + "每个 hunk 会验证 context lines 匹配后才应用，失败时自动回滚。\n"
-        + "适用场景：应用 code review 建议、同步 git diff 产出的修改。\n"
-        + "关键参数：path — 文件路径；diff — unified diff 文本（含 @@ hunk headers）。")]
+    [Description("�� unified diff ����Ӧ�õ��ļ���֧�ֱ�׼ diff -u ��ʽ��git diff �����\n"
+        + "ÿ�� hunk ����֤ context lines ƥ����Ӧ�ã�ʧ��ʱ�Զ��ع���\n"
+        + "���ó�����Ӧ�� code review ���顢ͬ�� git diff �������޸ġ�\n"
+        + "�ؼ�������path �� �ļ�·����diff �� unified diff �ı����� @@ hunk headers����")]
     public async Task<string> ApplyUnifiedDiff(
-        [Description("文件路径")] string path,
-        [Description("unified diff 文本，格式如：@@ -1,3 +1,4 @@\\n context\\n-old\\n+new")] string diff)
+        [Description("�ļ�·��")] string path,
+        [Description("unified diff �ı�����ʽ�磺@@ -1,3 +1,4 @@\\n context\\n-old\\n+new")] string diff)
     {
         var fp = SafePath(path);
-        if (fp == null) return "Error: path escape";
-        if (!File.Exists(fp)) return "File not found";
+        if (fp == null) return ToolResult.Error("path escape");
+        if (!File.Exists(fp)) return ToolResult.Error("File not found");
 
         var lines = await File.ReadAllLinesAsync(fp).ConfigureAwait(false);
         var hunks = ParseUnifiedHunks(diff);
-        if (hunks.Count == 0) return "No valid hunks found in diff";
+        if (hunks.Count == 0) return ToolResult.Error("No valid hunks found in diff");
 
         var result = new List<string>(lines);
         var applied = 0;
@@ -201,6 +195,9 @@ public sealed class TextTools
             foreach (var hl in hunkLines)
             {
                 if (hl.Length == 0) continue;
+                // Skip "\ No newline at end of file" markers
+                if (hl[0] == '\\')
+                    continue;
                 var prefix = hl[0];
                 var content = hl.Length > 1 ? hl[1..] : "";
 
@@ -284,6 +281,23 @@ public sealed class TextTools
         foreach (var line in diffLines)
         {
             var trimmed = line.TrimEnd('\r');
+
+            // Skip git diff headers (diff --git, index, ---/+++ filename lines)
+            if (trimmed.StartsWith("diff --git", StringComparison.Ordinal) ||
+                trimmed.StartsWith("index ", StringComparison.Ordinal) ||
+                trimmed.StartsWith("new file", StringComparison.Ordinal) ||
+                trimmed.StartsWith("deleted file", StringComparison.Ordinal) ||
+                trimmed.StartsWith("old mode", StringComparison.Ordinal) ||
+                trimmed.StartsWith("new mode", StringComparison.Ordinal) ||
+                trimmed.StartsWith("copy from", StringComparison.Ordinal) ||
+                trimmed.StartsWith("copy to", StringComparison.Ordinal) ||
+                trimmed.StartsWith("rename from", StringComparison.Ordinal) ||
+                trimmed.StartsWith("rename to", StringComparison.Ordinal) ||
+                trimmed.StartsWith("similarity index", StringComparison.Ordinal) ||
+                (trimmed.StartsWith("--- ", StringComparison.Ordinal) && currentHunk == null) ||
+                (trimmed.StartsWith("+++ ", StringComparison.Ordinal) && currentHunk == null))
+                continue;
+
             if (trimmed.StartsWith("@@ ") && trimmed.Contains(" @@"))
             {
                 if (currentHunk != null && currentHunk.Count > 0)
@@ -292,6 +306,12 @@ public sealed class TextTools
                     hunks.Add((oldStart, currentHunk.Skip(1).ToList()));
                 }
                 currentHunk = [trimmed];
+            }
+            else if (trimmed == @"\ No newline at end of file")
+            {
+                // Preserve marker in current hunk or skip if standalone
+                if (currentHunk != null)
+                    currentHunk.Add(trimmed);
             }
             else if (currentHunk != null && (trimmed.Length == 0 || trimmed[0] is ' ' or '-' or '+'))
             {
@@ -319,10 +339,10 @@ public sealed class TextTools
 
     // ========== DIFF ==========
 
-    [Description("比较两个文件或两段文本的内容差异，返回 unified diff 格式。\n"
-        + "适用场景：代码差异对比、配置文件比对、版本变更分析。\n"
-        + "不适用场景：Git 提交间的比较（请用 GitDiff）。\n"
-        + "关键参数：leftPath — 左文件路径或文本；rightPath — 右文件路径或文本。")]
+    [Description("�Ƚ������ļ��������ı������ݲ��죬���� unified diff ��ʽ��\n"
+        + "���ó������������Աȡ������ļ��ȶԡ��汾���������\n"
+        + "�����ó�����Git �ύ��ıȽϣ����� GitDiff����\n"
+        + "�ؼ�������leftPath �� ���ļ�·�����ı���rightPath �� ���ļ�·�����ı���")]
     public static string DiffFiles(string leftPath, string rightPath)
     {
         try
@@ -351,7 +371,7 @@ public sealed class TextTools
             var result = sb.ToString();
             return result.Length > 20000 ? ContentTruncator.Truncate(result, 20000) : result;
         }
-        catch (Exception ex) { return $"Diff error: {ex.Message}"; }
+        catch (Exception ex) { return ToolResult.Error($"{ex.Message}"); }
     }
 
     // ========== PRIVATE ==========
@@ -375,9 +395,9 @@ public sealed class TextTools
         }
         catch
         {
-            try { File.Delete(tmp); } catch
+            try { File.Delete(tmp); } catch (Exception ex_del)
             {
-                // non-critical, best-effort
+                System.Diagnostics.Debug.WriteLine($"[TextTools] Temp cleanup failed: {ex_del.Message}");
             }
             throw;
         }
@@ -388,7 +408,7 @@ public sealed class TextTools
     private static List<string> ComputeLcs(string[] a, string[] b)
     {
         int m = a.Length, n = b.Length;
-        // 使用 2 行滚动数组，避免 O(m*n) 内存
+        // ʹ�� 2 �й������飬���� O(m*n) �ڴ�
         var prev = new int[n + 1];
         var curr = new int[n + 1];
         for (int i = 1; i <= m; i++)
@@ -398,18 +418,18 @@ public sealed class TextTools
             (prev, curr) = (curr, prev);
         }
 
-        // 回溯重建 LCS（用 prev 数组 + 原始序列）
+        // �����ؽ� LCS���� prev ���� + ԭʼ���У�
         var result = new List<string>();
         int x = m, y = n;
-        // 重建时需要原始 dp 值，重新计算仅保留最后两行不够
-        // 改用 Hirschberg 算法或直接限制最大文件大小
-        // 实际场景限制：差异行数超过 1000 时截断
+        // �ؽ�ʱ��Ҫԭʼ dp ֵ�����¼��������������в���
+        // ���� Hirschberg �㷨��ֱ����������ļ���С
+        // ʵ�ʳ������ƣ������������� 1000 ʱ�ض�
         if (m > 1000 || n > 1000)
         {
             result.Add("...(diff too large, truncated)");
             return result;
         }
-        // 小文件用完整矩阵
+        // С�ļ�����������
         var dp = new int[m + 1, n + 1];
         for (int i = 1; i <= m; i++)
             for (int j = 1; j <= n; j++)

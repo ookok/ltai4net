@@ -423,7 +423,7 @@ partial class TextPadView
             _watcher.Renamed += OnFileRenamed; _watcher.Changed += OnFileChanged;
             _watcher.EnableRaisingEvents = true;
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[TextPadView] {ex.Message}"); }
+        catch (Exception ex) { Console.Error.WriteLine($"[TextPadView] {ex.Message}"); }
     }
 
     private void StopWatching()

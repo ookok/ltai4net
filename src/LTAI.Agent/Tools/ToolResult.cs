@@ -41,4 +41,11 @@ public static class ToolResult
         var msg = context != null ? $"{context}: {ex.Message}" : ex.Message;
         return Error(msg, new { type = ex.GetType().Name });
     }
+
+    /// <summary>Plain-text coreutils-style error: `tool: message`</summary>
+    public static string ErrorText(string tool, string message)
+        => $"{tool}: {message}";
+
+    /// <summary>Plain-text coreutils-style ok: just the output</summary>
+    public static string OkText(string output) => output;
 }

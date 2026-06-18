@@ -18,6 +18,7 @@ public sealed class ProvenanceProvider : AIContextProvider
     {
         if (context.AIContext.IsProviderSkipped("ProvenanceProvider"))
             return ValueTask.FromResult(context.AIContext ?? new AIContext());
+        LookaheadProviderSelector.RecordProviderUsed("ProvenanceProvider");
 
         var recent = _tracker.List();
         if (recent.Count == 0)

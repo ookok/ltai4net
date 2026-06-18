@@ -45,4 +45,9 @@
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
     <ProjectReference Include="..\LTAI.Mm\LTAI.Mm.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="LTAI.Desktop.Tests" />
+  </ItemGroup>
+
 </Project>

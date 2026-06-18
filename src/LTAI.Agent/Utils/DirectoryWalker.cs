@@ -4,9 +4,12 @@ namespace LTAI.Agent.Utils;
 
 internal static class DirectoryWalker
 {
-    private static readonly HashSet<string> DefaultSkipDirs = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>Unified skip directory list for all file traversal tools.</summary>
+    internal static readonly HashSet<string> DefaultSkipDirs = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".git", "node_modules", "bin", "obj", "dist", "packages", ".vs"
+        ".git", "node_modules", "bin", "obj", "dist", "build", "target",
+        ".venv", "venv", "__pycache__", ".vs", ".vscode", ".idea",
+        ".hg", ".svn", ".next", ".nuxt", ".turbo", ".vercel", ".cache", "packages"
     };
 
     public static IEnumerable<string> Walk(string root, HashSet<string>? skipDirNames = null)

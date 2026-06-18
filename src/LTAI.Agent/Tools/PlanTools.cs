@@ -9,15 +9,16 @@ namespace LTAI.Agent.Tools;
 
 public static class PlanTools
 {
+    /// <summary>Bounded plan state store. Set during DI init; defaults to in-process static.</summary>
+    public static PlanStore? Store { get; set; }
+
     // F1: Per-session plan isolation using ConcurrentDictionary + AsyncLocal.
-    // Replaces the old process-wide static field that leaked across conversations.
-    // ChatAgent sets SessionKey before any plan tool call.
-    private static readonly ConcurrentDictionary<string, PlanState> _plans = new();
-    private static readonly ConcurrentDictionary<string, Execution.ExecutionPlan> _executionPlan = new();
+    // Replaced by PlanStore DI singleton when available.
+    private static readonly ConcurrentDictionary<string, PlanState> _legacyPlans = new();
     private static readonly AsyncLocal<string?> _sessionId = new();
     private static readonly TimeSpan PlanTimeout = TimeSpan.FromMinutes(30);
-    private static DateTime _lastCleanup = DateTime.UtcNow;
-    private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(10);
+    private static DateTime _lastLegacyCleanup = DateTime.UtcNow;
+    private static readonly TimeSpan LegacyCleanupInterval = TimeSpan.FromMinutes(10);
 
     /// <summary>Set by ChatAgent before invoking plan tools, scoping PlanState to a session.</summary>
     public static string? SessionId { get => _sessionId.Value; set => _sessionId.Value = value; }
@@ -30,15 +31,47 @@ public static class PlanTools
 
     private static string SessionKey => SessionId ?? "default";
 
+    private static bool UseStore => Store != null;
+
+    private static string PlanStateKey(string session) => $"plan:{session}";
+
+    private static string ExecPlanKey(string session) => $"exec:{session}";
+
     private static PlanState? CurrentPlan
     {
-        get => _plans.TryGetValue(SessionKey, out var p) ? p : null;
+        get
+        {
+            if (UseStore)
+                return Store!.TryGet<PlanState>(PlanStateKey(SessionKey), out var p) ? p : null;
+            return _legacyPlans.TryGetValue(SessionKey, out var p2) ? p2 : null;
+        }
         set
         {
-            if (value != null)
-                _plans[SessionKey] = value;
+            if (UseStore)
+            {
+                if (value != null) Store!.Set(PlanStateKey(SessionKey), value);
+                else Store!.Remove(PlanStateKey(SessionKey));
+            }
             else
-                _plans.TryRemove(SessionKey, out _);
+            {
+                if (value != null) _legacyPlans[SessionKey] = value;
+                else _legacyPlans.TryRemove(SessionKey, out _);
+            }
+        }
+    }
+
+    private static Execution.ExecutionPlan? CurrentExecPlan
+    {
+        get
+        {
+            if (UseStore)
+                return Store!.TryGet<Execution.ExecutionPlan>(ExecPlanKey(SessionKey), out var p) ? p : null;
+            return null; // legacy: stored in _executionPlan field (removed)
+        }
+        set
+        {
+            if (UseStore && value != null)
+                Store!.Set(ExecPlanKey(SessionKey), value);
         }
     }
 
@@ -106,7 +139,7 @@ public static class PlanTools
             try
             {
                 var execPlan = await ExecutionEngine.PlanAsync(summary).ConfigureAwait(false);
-                _executionPlan[SessionKey] = execPlan;
+                CurrentExecPlan = execPlan;
             }
             catch (Exception ex)
             {
@@ -295,7 +328,8 @@ public static class PlanTools
         CurrentPlan = plan with { Status = "approved" };
 
         // Trigger ExecutionEngine execution if available
-        if (ExecutionEngine != null && _executionPlan.TryGetValue(SessionKey, out var execPlan))
+        var execPlan = CurrentExecPlan;
+        if (ExecutionEngine != null && execPlan != null)
         {
             try
             {
@@ -329,13 +363,14 @@ public static class PlanTools
         var first = CurrentPlan!.Steps[0];
 
         // Notify ExecutionEngine that execution has started
-        if (ExecutionEngine != null && _executionPlan.TryGetValue(SessionKey, out var execPlan))
+        var execPlan = CurrentExecPlan;
+        if (ExecutionEngine != null && execPlan != null)
         {
             var startResult = ExecutionEngine.PlanAsync(plan.Summary).GetAwaiter().GetResult();
             if (startResult != null)
             {
-                _executionPlan[SessionKey] = startResult;
-                _ = FireAndForgetExecute(execPlan);
+                CurrentExecPlan = startResult;
+                _ = FireAndForgetExecute(startResult);
             }
         }
 
@@ -354,16 +389,20 @@ public static class PlanTools
     /// <summary>Periodically evict stale session plans. Called by ChatAgent.</summary>
     public static void EvictStaleSessions()
     {
-        var now = DateTime.UtcNow;
-        if ((now - _lastCleanup) < CleanupInterval) return;
-        _lastCleanup = now;
-        foreach (var key in _plans.Keys.ToArray())
+        if (UseStore)
         {
-            if (_plans.TryGetValue(key, out var plan)
+            Store!.EvictStaleSessions();
+            return;
+        }
+        var now = DateTime.UtcNow;
+        if ((now - _lastLegacyCleanup) < LegacyCleanupInterval) return;
+        _lastLegacyCleanup = now;
+        foreach (var key in _legacyPlans.Keys.ToArray())
+        {
+            if (_legacyPlans.TryGetValue(key, out var plan)
                 && (now - plan.CreatedAt) > TimeSpan.FromHours(2))
             {
-                _plans.TryRemove(key, out _);
-                _executionPlan.TryRemove(key, out _);
+                _legacyPlans.TryRemove(key, out _);
             }
         }
     }

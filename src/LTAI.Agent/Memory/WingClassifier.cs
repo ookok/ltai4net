@@ -23,9 +23,8 @@ internal static class WingClassifier
     /// <summary>
     /// Optional LLM-powered wing classifier fallback. Set in DI startup.
     /// Called when FastEmb cosine similarity is below threshold.
-    /// Signature: (text) -> wingName or null.
     /// </summary>
-    public static Func<string, string?>? LlmClassifier { get; set; }
+    internal static Func<string, string?>? LlmClassifier { get; set; }
 
     private static readonly Lazy<Dictionary<string, float[]>> _wingEmbeddings = new(() =>
     {

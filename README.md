@@ -26,18 +26,21 @@ L0  Runtime          — MAF Pipeline + Wasmtime Sandbox + Budget/Usage Tracker 
 ## 快速开始
 
 ```bash
-# 1. 设置 API Key（任选一个即可，其余自动）
-set DEEPSEEK_API_KEY=your_key_here
-# set OPENAI_API_KEY=sk-...
+# 1. 创建 .env 文件（从模板复制）
+copy .env.example .env
+# 或:  cp .env.example .env
 
-# 2. 启动（选一种）
-dotnet run --project src/LTAI.TUI           # 终端 UI（推荐）
-dotnet run --project src/LTAI.Desktop       # 桌面 UI (Avalonia)
-dotnet run --project src/LTAI.Web           # Web API
+# 2. 编辑 .env，填入你的 DeepSeek API Key（或任意 LLM Key）
+#    DEEPSEEK_API_KEY=sk-your-key
 
-# 3. 运行测试
-dotnet test
+# 3. 启动（选一种）
+./run-tui.bat                              # 终端 UI（推荐）
+./run-web.bat                              # Web API → http://localhost:5100
+./run-desktop.bat                          # 桌面 UI
+dotnet run --project src/LTAI.Cli -- health # CLI 健康检查
 ```
+
+**只需一个 API Key，无需额外配置。** `.env` 文件在启动时自动加载，`appsettings.json` 已内置默认 `deepseek-fast` 提供程序。L1/L2/L3 模型自动选拔。
 
 ## 模型自动选拔
 

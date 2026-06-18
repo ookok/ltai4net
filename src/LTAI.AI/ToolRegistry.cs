@@ -207,6 +207,7 @@ public sealed class ToolRegistry : IToolRegistry
     public static async Task InitializeAsync(IEnumerable<AITool> tools, EmbeddingClient embedder,
         ToolEmbeddingCache? cache = null, CancellationToken ct = default)
     {
+        // Volatile check (fast path, no lock)
         if (_initialized) return;
         var list = tools.ToList();
         var texts = list.Select(BuildEmbeddingText).ToArray();
@@ -252,9 +253,13 @@ public sealed class ToolRegistry : IToolRegistry
         // ── BM25 倒排索引 ──
         lock (_lock)
         {
+            // Double-check after acquiring the lock.
+            // If Clear() was called between the volatile check and here,
+            // _initialized is false and we proceed correctly.
             if (_initialized) return;
             BuildBm25Index(texts);
             _tools.AddRange(defs);
+            Thread.MemoryBarrier();
             _initialized = true;
             _snapshot = _tools.ToArray();
         }
@@ -526,8 +531,13 @@ public sealed class ToolRegistry : IToolRegistry
             _avgDocLen = 0;
             _initialized = false;
             _snapshot = [];
+            _stats.Clear();
+            _bm25Version = 0;
         }
     }
+
+    /// <summary>Reset all usage statistics (for test isolation).</summary>
+    public static void ClearStats() => _stats.Clear();
 
     /// <summary>
     /// P14.8: mark all stored tool embeddings as stale (sentinel

@@ -2,6 +2,7 @@ using Avalonia.Controls;
 
 namespace LTAI.Desktop.Tests;
 
+[Collection("AvaloniaHeadless")]
 public sealed class SkillsViewUITests
 {
     [Fact]

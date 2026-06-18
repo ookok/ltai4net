@@ -40,6 +40,7 @@ public sealed class LookaheadProviderSelector : AIContextProvider
     /// <summary>Provider skip accuracy tracker: name → (predicted correct, total skips)</summary>
     private static readonly ConcurrentDictionary<string, (int Correct, int Total)> SkipAccuracy
         = new(StringComparer.OrdinalIgnoreCase);
+    private const int SkipAccuracyMaxEntries = 100;
 
     /// <summary>
     /// MGPO-style boundary threshold. A provider is at the "capability boundary"
@@ -50,8 +51,14 @@ public sealed class LookaheadProviderSelector : AIContextProvider
     private static (double lower, double upper) BoundaryZone => (0.70, 0.90);
 
     /// <summary>Record a skip prediction outcome for a provider.</summary>
-    internal static void RecordSkipOutcome(string providerName, bool wasCorrect)
+    public static void RecordSkipOutcome(string providerName, bool wasCorrect)
     {
+        // Bounded capacity: avoid unbounded growth from many unique providers
+        if (SkipAccuracy.Count >= SkipAccuracyMaxEntries && !SkipAccuracy.ContainsKey(providerName))
+        {
+            var oldest = SkipAccuracy.Keys.FirstOrDefault();
+            if (oldest != null) SkipAccuracy.TryRemove(oldest, out _);
+        }
         SkipAccuracy.AddOrUpdate(providerName,
             _ => (wasCorrect ? 1 : 0, 1),
             (_, old) => (old.Correct + (wasCorrect ? 1 : 0), old.Total + 1));
@@ -108,14 +115,60 @@ public sealed class LookaheadProviderSelector : AIContextProvider
     private static readonly string[] MediumProviders =
     ["L3OnDemand"];
 
+    // All providers (heavy + medium) for feedback iteration
+    private static readonly string[] AllProviderNames =
+        [.. HeavyProviders, .. MediumProviders];
+
     // Minimum threshold for embedding-based domain similarity (ignored when embedder unavailable)
     private const double EmbeddingSimilarityThreshold = 0.20;
+
+    // ── ContextRL contrastive feedback calibration ──
+    // Per-provider threshold overrides learned from contrastive pairs.
+    // When set (> 0), replaces the global EmbeddingSimilarityThreshold for that provider.
+    private static readonly ConcurrentDictionary<string, double> PerProviderThreshold
+        = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Record contrastive feedback for a (query, provider) pair.
+    /// Called by downstream providers when they determine whether their data was useful.
+    /// </summary>
+    public static void RecordProviderFeedback(string query, float[]? queryEmbedding, string provider, bool wasUseful)
+    {
+        ContrastiveFeedbackStore.Record(query, queryEmbedding, provider, wasUseful);
+    }
+
+    /// <summary>
+    /// Apply calibrated thresholds from contrastive feedback analysis.
+    /// Called automatically by ContrastiveFeedbackStore when enough data accumulates.
+    /// </summary>
+    internal static void ApplyCalibratedThresholds(Dictionary<string, double> thresholds)
+    {
+        foreach (var (provider, threshold) in thresholds)
+            PerProviderThreshold[provider] = Math.Clamp(threshold, 0.05, 0.95);
+    }
+
+    /// <summary>
+    /// Record that a provider was consulted (not skipped) and produced meaningful output.
+    /// Called by downstream providers after they pass the IsProviderSkipped check.
+    /// </summary>
+    public static void RecordProviderUsed(string providerName)
+        => RecordSkipOutcome(providerName, wasCorrect: true);
+
+    /// <summary>
+    /// Record that a skipped provider would have been useful (false negative).
+    /// Called by agent logic when it detects that data from a skipped provider
+    /// would have helped answer the query.
+    /// </summary>
+    public static void RecordProviderMissed(string providerName)
+        => RecordSkipOutcome(providerName, wasCorrect: false);
 
     public LookaheadProviderSelector(EmbeddingClient? embedder = null, ILogger<LookaheadProviderSelector>? logger = null)
         : base(null, null, null)
     {
         _embedder = embedder;
         _logger = logger;
+        // Wire contrastive feedback calibration callback (decouples reverse dependency)
+        ContrastiveFeedbackStore.OnCalibrated = ApplyCalibratedThresholds;
     }
 
     public override IReadOnlyList<string> StateKeys => ["LookaheadRoute"];
@@ -135,6 +188,8 @@ public sealed class LookaheadProviderSelector : AIContextProvider
             if (query.Length < 5)
             {
                 MetricShortQuerySkip.Add(1);
+                // Short queries (greetings/acknowledgments) skip feedback recording
+                // to avoid polluting contrastive signal with noise.
                 return await ClassifyAndSkipAsync("general", ct).ConfigureAwait(false);
             }
 
@@ -148,6 +203,17 @@ public sealed class LookaheadProviderSelector : AIContextProvider
 
             MetricClassified.Add(1);
             MetricProvidersSkipped.Add(skipList.Count);
+
+            // ContextRL: record contrastive feedback for each skip/keep decision
+            // so downstream calibration can learn optimal per-domain thresholds.
+            var qVec = _lastQueryVec;
+            foreach (var p in AllProviderNames)
+            {
+                var skipped = skipList.Contains(p);
+                // Record every decision as an implicit "we predicted skip={skipped}".
+                // Actual usefulness is determined when the provider checks IsProviderSkipped.
+                ContrastiveFeedbackStore.Record(query, qVec, p, wasUseful: !skipped);
+            }
 
             _logger?.LogDebug("LookaheadProviderSelector: query=\"{Query}\" domains=[{Domains}] skip=[{Skip}]",
                 query.Length > 60 ? query[..60] + "..." : query,
@@ -468,4 +534,5 @@ public static class ProviderRouteExtensions
 
         return false;
     }
+
 }

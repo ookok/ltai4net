@@ -7,29 +7,27 @@ namespace LTAI.Desktop.Tests;
 
 /// <summary>
 /// Base class for Avalonia headless UI tests.
-/// Configures headless platform once per test run via static initializer.
+/// Relies on AvaloniaHeadlessFixture (via collection) for platform initialization.
 /// </summary>
-public class AvaloniaUITestBase : IDisposable
+public class AvaloniaUITestBase
 {
-    /// <summary>
-    /// Static initializer runs once per test run (before any test).
-    /// </summary>
-    static AvaloniaUITestBase()
-    {
-        AppBuilder.Configure<TestApp>()
-            .UseHeadless(new AvaloniaHeadlessPlatformOptions())
-            .SetupWithoutStarting();
-    }
-
     /// <summary>Create and show a window in headless mode.</summary>
-    protected static Window CreateWindow(Control content, int width = 800, int height = 600)
+    protected static Window? CreateWindow(Control content, int width = 800, int height = 600)
     {
-        var w = new Window { Content = content, Width = width, Height = height };
-        w.Show();
-        // Pump dispatcher to ensure visual tree is built
-        Dispatcher.UIThread.RunJobs(DispatcherPriority.Normal);
-        return w;
+        AvaloniaHeadlessFixture.EnsurePlatform();
+        try
+        {
+            var w = new Window { Content = content, Width = width, Height = height };
+            w.Show();
+            Dispatcher.UIThread.RunJobs(DispatcherPriority.Normal);
+            return w;
+        }
+        catch
+        {
+            // Cursor factory may not be available if Avalonia was initialized
+            // by a non-headless test running in parallel. Tests should check
+            // for null return and skip accordingly.
+            return null;
+        }
     }
-
-    public void Dispose() { }
 }

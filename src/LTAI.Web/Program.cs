@@ -15,6 +15,9 @@ using OpenTelemetry.Trace;
 using System.Threading.Channels;
 using Serilog;
 
+// ── Auto-load .env from solution root or output directory ──
+LTAI.Core.Configuration.DotEnvLoader.Load();
+
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .Enrich.WithProperty("Application", "LTAI.Web")
@@ -931,6 +934,9 @@ finally
 {
     Log.CloseAndFlush();
 }
+
+// Entry point class for WebApplicationFactory<Program> integration tests.
+public partial class Program { }
 
 // Helper: IWorkflowSubscriber that writes JSON SSE events to a Channel<string>.
 sealed class SseWorkflowSubscriber(System.Threading.Channels.ChannelWriter<string> writer) : LTAI.Agent.Workflows.IWorkflowSubscriber

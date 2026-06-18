@@ -218,7 +218,6 @@ public async Task RefreshAsync(CancellationToken ct)
     public static string DefaultEnvVar(string providerId) => providerId.ToUpperInvariant() switch
     {
         "ALIBABA" => "DASHSCOPE_API_KEY",
-        "ZHIPUAI" => "ZHIPU_API_KEY",
         _ => $"{providerId.ToUpperInvariant()}_API_KEY",
     };
 }

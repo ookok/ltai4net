@@ -25,6 +25,11 @@
     <ProjectReference Include="..\..\src\LTAI.Desktop\LTAI.Desktop.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Reference Include="Microsoft.Agents.AI.Abstractions" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll')" />
+    <Reference Include="Microsoft.Agents.AI" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.dll')" />
+  </ItemGroup>
+
   <!-- Tests re-enabled during P1 audit. Comment out if UI API changes break them. -->
 
 </Project>

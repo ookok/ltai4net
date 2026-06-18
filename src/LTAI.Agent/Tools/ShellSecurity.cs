@@ -1,47 +1,97 @@
 using System.Collections;
 using System.Diagnostics;
+using LTAI.Core.Configuration;
+using SecurityConfig = LTAI.Core.Configuration.ShellSecurityConfig;
 
 namespace LTAI.Agent.Tools;
 
 internal static class ShellSecurity
 {
-    internal static readonly HashSet<string> BlockedExes = new(StringComparer.OrdinalIgnoreCase)
+    static ShellSecurity()
     {
-        "sudo", "su", "chmod", "chown", "mkfs", "fdisk",
-        "dd", "shutdown", "reboot", "init", "halt", "poweroff",
-        "passwd", "useradd", "usermod", "groupadd", "fuser", "kill",
-        "mount", "umount", "iptables", "ufw", "systemctl",
-        "cmd", "cmd.exe", "certutil", "bitsadmin", "mshta", "cscript", "wmic",
-        "reg", "schtasks", "diskpart", "bcdedit", "regsvr32", "rundll32",
-        "attrib", "cacls", "takeown", "icacls", "vssadmin",
-    };
+        ResetToDefaults();
+    }
 
-    internal static readonly string[] DangerousPatterns =
+    public static void ResetToDefaults()
     {
-        "rm -rf /", "rm -rf ~", "rm -rf --no-preserve-root",
-        ":(){ :|:& };:", "eval ", "exec ",
-        "> /dev/", "dd if=", "wget -O - | sh", "curl .* | sh",
-        "wget .* -O ", "certutil .* -urlcache", "bitsadmin .* /transfer",
-    };
+        BlockedExes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "sudo", "su", "chmod", "chown", "mkfs", "fdisk",
+            "dd", "shutdown", "reboot", "init", "halt", "poweroff",
+            "passwd", "useradd", "usermod", "groupadd", "fuser", "kill",
+            "mount", "umount", "iptables", "ufw", "systemctl",
+            "cmd", "cmd.exe", "certutil", "bitsadmin", "mshta", "cscript", "wmic",
+            "reg", "schtasks", "diskpart", "bcdedit", "regsvr32", "rundll32",
+            "attrib", "cacls", "takeown", "icacls", "vssadmin",
+        };
+        DangerousPatterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "rm -rf /", "rm -rf ~", "rm -rf --no-preserve-root",
+            ":(){ :|:& };:", "eval ", "exec ",
+            "> /dev/", "dd if=", "wget -O - | sh", "curl .* | sh",
+            "wget .* -O ", "certutil .* -urlcache", "bitsadmin .* /transfer",
+        };
+        ProtectedPaths =
+        [
+            "/etc", "/sys", "/proc", "/dev", "/boot",
+            "/var/log", "/var/lib", "/var/spool",
+            "C:\\Windows", "C:\\Windows\\System32",
+            "C:\\Program Files", "C:\\Program Files (x86)",
+            "C:\\ProgramData",
+        ];
+        CodeExecNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "bash", "sh", "zsh", "dash", "ksh", "fish",
+            "python", "python2", "python3", "py",
+            "perl", "perl5",
+            "ruby", "rake",
+            "php",
+            "lua", "luajit",
+            "tclsh", "wish",
+            "powershell", "pwsh", "powershell.exe", "pwsh.exe",
+        };
+        CodeExecArgs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "-c", "-command", "-e", "-i",
+        };
+        CommandSeps = ["&&", "||", "|", "&", ";"];
+    }
 
-    internal static readonly HashSet<string> CodeExecNames = new(StringComparer.OrdinalIgnoreCase)
+    public static HashSet<string> BlockedExes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public static HashSet<string> DangerousPatterns { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public static string[] ProtectedPaths { get; set; } = [];
+    public static HashSet<string> CodeExecNames { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public static HashSet<string> CodeExecArgs { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public static string[] CommandSeps { get; set; } = [];
+
+    /// <summary>Apply user config on top of built-in defaults.</summary>
+    public static void ApplyConfig(SecurityConfig config)
     {
-        "bash", "sh", "zsh", "dash", "ksh", "fish",
-        "python", "python2", "python3", "py",
-        "perl", "perl5",
-        "ruby", "rake",
-        "php",
-        "lua", "luajit",
-        "tclsh", "wish",
-        "powershell", "pwsh", "powershell.exe", "pwsh.exe",
-    };
-
-    internal static readonly HashSet<string> CodeExecArgs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "-c", "-command", "-e", "-i",
-    };
-
-    internal static readonly string[] CommandSeps = { " & ", " && ", " || ", " | ", "; " };
+        if (config.BlockedExes.Length > 0)
+        {
+            foreach (var exe in config.BlockedExes)
+                BlockedExes.Add(exe);
+        }
+        if (config.DangerousPatterns.Length > 0)
+        {
+            foreach (var p in config.DangerousPatterns)
+                DangerousPatterns.Add(p);
+        }
+        if (config.ProtectedPaths.Length > 0)
+            ProtectedPaths = [.. ProtectedPaths, .. config.ProtectedPaths];
+        if (config.CodeExecNames.Length > 0)
+        {
+            foreach (var n in config.CodeExecNames)
+                CodeExecNames.Add(n);
+        }
+        if (config.CodeExecArgs.Length > 0)
+        {
+            foreach (var a in config.CodeExecArgs)
+                CodeExecArgs.Add(a);
+        }
+        if (config.CommandSeps.Length > 0)
+            CommandSeps = [.. CommandSeps, .. config.CommandSeps];
+    }
 
     internal static bool IsBlocked(string command)
     {
@@ -59,22 +109,21 @@ internal static class ShellSecurity
         if (parts.Length >= 2 && CodeExecNames.Contains(parts[0]) && CodeExecArgs.Contains(parts[1]))
             return true;
 
-        foreach (var sep in CommandSeps)
+        if (CommandSeps.Any(sep => cmdLower.Contains(sep)))
         {
-            if (cmdLower.Contains(sep))
+            var partsChk = command.Split(CommandSeps, StringSplitOptions.TrimEntries);
+            foreach (var part in partsChk)
             {
-                var partsChk = command.Split(["&&", "||", "|", "&", ";"], StringSplitOptions.TrimEntries);
-                foreach (var part in partsChk)
-                {
-                    var partExec = part.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                    if (partExec.Length == 0) continue;
-                    var pn = Path.GetFileName(partExec[0].AsSpan()).ToString();
-                    if (BlockedExes.Contains(pn) || CodeExecNames.Contains(pn))
-                        return true;
-                }
-                break;
+                var partExec = part.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (partExec.Length == 0) continue;
+                var pn = Path.GetFileName(partExec[0].AsSpan()).ToString();
+                if (BlockedExes.Contains(pn) || CodeExecNames.Contains(pn))
+                    return true;
             }
         }
+
+        if (ProtectedPaths.Any(p => cmdLower.Contains(p.ToLowerInvariant())))
+            return true;
 
         return false;
     }

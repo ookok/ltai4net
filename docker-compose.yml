@@ -1,6 +1,6 @@
 # LTAI — Docker Compose
 # Usage: docker compose up -d
-# Requires: DEEPSEEK_API_KEY (or other LLM provider key)
+# Requires: .env file with DEEPSEEK_API_KEY (or other LLM provider key)
 
 services:
   ltai-web:
@@ -14,10 +14,6 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
     env_file:
       - .env
-    secrets:
-      - deepseek_api_key
-      - siliconflow_api_key
-      - openai_api_key
     volumes:
       - ltai-data:/app/.livingtree
     restart: unless-stopped
@@ -33,14 +29,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
-secrets:
-  deepseek_api_key:
-    environment: DEEPSEEK_API_KEY
-  siliconflow_api_key:
-    environment: SILICONFLOW_API_KEY
-  openai_api_key:
-    environment: OPENAI_API_KEY
 
 volumes:
   ltai-data:

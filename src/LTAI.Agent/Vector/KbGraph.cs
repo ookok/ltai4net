@@ -29,6 +29,9 @@ namespace LTAI.Agent.Vector;
 /// </summary>
 public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
 {
+    /// <summary>DI singleton instance, for static forwarding methods.</summary>
+    internal static KbGraph? Default;
+
     private readonly KgStore _store;
     private readonly IChatClient? _rewriter;
     private readonly Reranker? _reranker;
@@ -55,6 +58,7 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
         _reranker = reranker;
         _embedder = embedder;
         _logger = logger ?? NullLogger<KbGraph>.Instance;
+        if (Default == null) Default = this;
     }
 
     // ═══════════════════════════════════════════
@@ -109,7 +113,7 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
         {
             try
             {
-                var localEmb = GetSharedEmbedder();
+                var localEmb = _embedder?.Local;
                 if (localEmb != null && localEmb.Available)
                 {
                     var queryEmb = localEmb.Generate(query);
@@ -356,6 +360,7 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
             _logger.LogDebug("KbGraph: skipped by LookaheadProviderSelector");
             return context.AIContext!;
         }
+        LookaheadProviderSelector.RecordProviderUsed("KbGraph");
 
         var userMsg = msgs.LastOrDefault(m => m.Role == ChatRole.User);
         if (userMsg?.Text == null || userMsg.Text.Length < 5)
@@ -705,6 +710,7 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
     // Query expansion cache (TTL: 5 minutes)
     private static readonly ConcurrentDictionary<string, (string Expanded, DateTime CachedAt)> _expansionCache = new();
     private static readonly TimeSpan ExpansionCacheTtl = TimeSpan.FromMinutes(5);
+    private const int ExpansionCacheMaxSize = 1000;
 
     private async Task<string> ExpandQueryAsync(string query, CancellationToken ct)
     {
@@ -751,7 +757,7 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
             _expansionCache[cacheKey] = (expanded, DateTime.UtcNow);
 
             // Evict old entries periodically
-            if (_expansionCache.Count > 1000)
+            if (_expansionCache.Count >= ExpansionCacheMaxSize)
             {
                 var now = DateTime.UtcNow;
                 foreach (var key in _expansionCache.Keys.ToList())
@@ -761,6 +767,15 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
                     {
                         _expansionCache.TryRemove(key, out _);
                     }
+                }
+                // Hard limit: if still too large, remove oldest entry
+                while (_expansionCache.Count >= ExpansionCacheMaxSize)
+                {
+                    var oldest = _expansionCache.MinBy(kv => kv.Value.CachedAt);
+                    if (oldest.Key != null)
+                        _expansionCache.TryRemove(oldest.Key, out _);
+                    else
+                        break;
                 }
             }
 
@@ -865,11 +880,11 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
         "测试测试 只是测试 试试看",
     ];
 
-    private static float[]? _knowledgeCentroid;
-    private static float[]? _skipCentroid;
-    private static readonly object _centroidLock = new();
+    private float[]? _knowledgeCentroid;
+    private float[]? _skipCentroid;
+    private readonly object _centroidLock = new();
 
-    private static void EnsureCentroids()
+    private void EnsureCentroids()
     {
         if (_knowledgeCentroid != null) return;
         lock (_centroidLock)
@@ -880,17 +895,13 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
         }
     }
 
-    private static float[] ComputeCentroid(string[] anchors)
+    private float[] ComputeCentroid(string[] anchors)
     {
         const int dim = 384;
         var sum = new float[dim];
         int count = 0;
 
-        // 优先使用 ONNX LocalEmbedder（BGE 模型），不可用时回退 FastEmb
-        // P12.3: GetSharedEmbedder returns null when remote API is available
-        // (LocalEmbedder.DefaultDisabled) — fall through to FastEmb without
-        // ever loading the 90 MB model file.
-        var localEmb = GetSharedEmbedder();
+        var localEmb = _embedder?.Local;
 
         foreach (var anchor in anchors)
         {
@@ -921,7 +932,16 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
     /// <summary>Intent-based KG gate. Uses FastEmb + cosine similarity.</summary>
     public static bool IsKnowledgeQuery(string text)
     {
-        // 代码模式 → 强制走 KG（跳过 centroid 分类）
+        var instance = Default;
+        if (instance == null)
+        {
+            try { instance = new KbGraph(new KgStore(":memory:")); } catch { return false; }
+        }
+        return instance.IsKnowledgeQueryInstance(text);
+    }
+
+    private bool IsKnowledgeQueryInstance(string text)
+    {
         if (ContainsCodePattern(text))
             return true;
 
@@ -932,14 +952,7 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
         return knowledgeScore > skipScore + 0.05f;
     }
 
-    // 共享 LocalEmbedder 实例 — 避免每次查询都加载 90MB ONNX 模型
-    // P12.3: respects LocalEmbedder.DefaultDisabled (when remote API key is
-    // present, returns null and callers fall back to FastEmb without ever
-    // touching the local model).
-    private static readonly Lazy<LocalEmbedder?> _sharedEmbedder = new(() =>
-        LocalEmbedder.DefaultDisabled ? null : new LocalEmbedder(), true);
-
-    private static LocalEmbedder? GetSharedEmbedder() => _sharedEmbedder.Value;
+    // LocalEmbedder resolved from constructor; falls back to null when not available.
 
     private static string FormatNode(NodeRow node)
     {

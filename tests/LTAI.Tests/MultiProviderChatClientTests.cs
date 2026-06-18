@@ -25,7 +25,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task DegradationChain_PrimaryFails_FallsBack()
     {
-        var router = new MultiProviderChatClient(DefaultOpts);
+        var router = TestHelper.CreateRouter(DefaultOpts);
         router.Register("l2", new EchoChatClient("fallback-ok"));
         var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-fallback-primary")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
@@ -35,7 +35,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task DegradationChain_MultiLevel_FallsBack()
     {
-        var router = new MultiProviderChatClient(DefaultOpts);
+        var router = TestHelper.CreateRouter(DefaultOpts);
         router.Register("fallback", new EchoChatClient("last-resort"));
         var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-fallback-multi")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
@@ -54,7 +54,7 @@ public sealed class MultiProviderChatClientTests
                 PerUserTokenBudget = 200_000,
             }
         };
-        var router = new MultiProviderChatClient(opts);
+        var router = TestHelper.CreateRouter(opts);
         var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-no-providers")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
         Assert.Contains("All providers failed", text, StringComparison.OrdinalIgnoreCase);
@@ -63,7 +63,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task GetResponseAsync_NoProviders_ReturnsError()
     {
-        var router = new MultiProviderChatClient(new LTAIOptions());
+        var router = TestHelper.CreateRouter();
         var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-no-registered")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
         Assert.Contains("All providers failed", text, StringComparison.OrdinalIgnoreCase);
@@ -72,7 +72,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task GetResponseAsync_SingleProvider_Succeeds()
     {
-        var router = new MultiProviderChatClient(DefaultOpts);
+        var router = TestHelper.CreateRouter(DefaultOpts);
         router.Register("l1", new EchoChatClient("hello world"));
         var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-single-provider")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
@@ -82,7 +82,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task GetResponseAsync_PicksCorrectProviderByModelId()
     {
-        var router = new MultiProviderChatClient(DefaultOpts);
+        var router = TestHelper.CreateRouter(DefaultOpts);
         router.Register("l1", new EchoChatClient("from-l1"));
         router.Register("l2", new EchoChatClient("from-l2"));
         var resp = await router.GetResponseAsync(
@@ -94,7 +94,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task CircuitBreaker_3Failures_TriggersCooldown()
     {
-        var router = new MultiProviderChatClient(DefaultOpts);
+        var router = TestHelper.CreateRouter(DefaultOpts);
         router.Register("l1", new FaultyChatClient(new InvalidOperationException("transient")));
         router.Register("l2", new EchoChatClient("after-cooldown"));
 
@@ -109,7 +109,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task Degradation_SkipsCooldownProvider()
     {
-        var router = new MultiProviderChatClient(DefaultOpts);
+        var router = TestHelper.CreateRouter(DefaultOpts);
         router.Register("l1", new FaultyChatClient(new InvalidOperationException("failing")));
         router.Register("l2", new EchoChatClient("skipped-cooldown"));
 
@@ -124,7 +124,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task ResponseCache_HitReturnsCachedValue()
     {
-        var router = new MultiProviderChatClient(DefaultOpts);
+        var router = TestHelper.CreateRouter(DefaultOpts);
         var provider = new CountingChatClient();
         router.Register("l1", provider);
 
@@ -140,7 +140,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task ResponseCache_DifferentInput_DifferentCacheEntry()
     {
-        var router = new MultiProviderChatClient(DefaultOpts);
+        var router = TestHelper.CreateRouter(DefaultOpts);
         var provider = new CountingChatClient();
         router.Register("l1", provider);
 
@@ -153,14 +153,14 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task RegisteredProviders_InitiallyEmpty()
     {
-        var router = new MultiProviderChatClient(new LTAIOptions());
+        var router = TestHelper.CreateRouter();
         Assert.Empty(router.RegisteredProviders);
     }
 
     [Fact]
     public async Task RegisteredProviders_AfterRegistration_ContainsKey()
     {
-        var router = new MultiProviderChatClient(new LTAIOptions());
+        var router = TestHelper.CreateRouter();
         router.Register("my-provider", new EchoChatClient("ok"));
         Assert.Contains("my-provider", router.RegisteredProviders);
     }
@@ -168,7 +168,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task ActiveProvider_DefaultValue()
     {
-        var router = new MultiProviderChatClient(new LTAIOptions
+        var router = TestHelper.CreateRouter(new LTAIOptions
         {
             AI = new AIConfig { DefaultProvider = "custom-default", GlobalTokenBudget = 1_000_000, PerUserTokenBudget = 200_000 }
         });
@@ -179,7 +179,7 @@ public sealed class MultiProviderChatClientTests
     public async Task ActiveProvider_CanChange()
     {
         var opts = new LTAIOptions { AI = new AIConfig { DefaultProvider = "old", GlobalTokenBudget = 1_000_000, PerUserTokenBudget = 200_000 } };
-        var router = new MultiProviderChatClient(opts);
+        var router = TestHelper.CreateRouter(opts);
         router.ActiveProvider = "new-provider";
         Assert.Equal("new-provider", router.ActiveProvider);
     }
@@ -187,7 +187,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task Streaming_NoProviders_ReturnsError()
     {
-        var router = new MultiProviderChatClient(new LTAIOptions());
+        var router = TestHelper.CreateRouter();
         var results = new List<ChatResponseUpdate>();
         await foreach (var update in router.GetStreamingResponseAsync(
             [new ChatMessage(ChatRole.User, "unique-stream-no-prov")]))
@@ -202,7 +202,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task Streaming_SingleProvider_Succeeds()
     {
-        var router = new MultiProviderChatClient(DefaultOpts);
+        var router = TestHelper.CreateRouter(DefaultOpts);
         router.Register("l1", new EchoChatClient("stream response"));
         var results = new List<ChatResponseUpdate>();
         await foreach (var update in router.GetStreamingResponseAsync(
@@ -218,7 +218,7 @@ public sealed class MultiProviderChatClientTests
     [Fact]
     public async Task Streaming_FallbackOnFailure()
     {
-        var router = new MultiProviderChatClient(DefaultOpts);
+        var router = TestHelper.CreateRouter(DefaultOpts);
         router.Register("l1", new FaultyChatClient(new InvalidOperationException("stream fail")));
         router.Register("l2", new EchoChatClient("stream fallback"));
 

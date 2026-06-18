@@ -45,14 +45,21 @@ public sealed class ToolTrustService
 
     private static Regex GlobToRegex(string pattern)
     {
-        var escaped = string.Concat(
-            pattern.Select(c => c switch
+        var sb = new System.Text.StringBuilder(pattern.Length * 2);
+        foreach (var c in pattern)
+        {
+            switch (c)
             {
-                '*' => ".*",
-                '?' => ".",
-                '.' => "\\.",
-                _ => c.ToString()
-            }));
-        return new Regex($"^{escaped}$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                case '*': sb.Append(".*"); break;
+                case '?': sb.Append('.'); break;
+                case '.':
+                case '(': case ')': case '[': case ']':
+                case '{': case '}': case '^': case '$':
+                case '+': case '|': case '\\':
+                    sb.Append('\\'); sb.Append(c); break;
+                default: sb.Append(c); break;
+            }
+        }
+        return new Regex($"^{sb}$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     }
 }

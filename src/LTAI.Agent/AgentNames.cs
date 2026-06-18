@@ -25,4 +25,5 @@ internal static class AgentNames
     public const string Security = "LTAI-Security";
     public const string DevOps = "LTAI-DevOps";
     public const string Office = "LTAI-Office";
+    public const string Explore = "LTAI-Explore";
 }

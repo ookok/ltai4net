@@ -130,5 +130,6 @@ internal static class AgentDefinitionLoader
         yield return new("LTAI-DevOps",   "DevOps 运维助手",        true,  true,  true,  true,  null, 0.3f, 0.95f);
         yield return new("LTAI-Office",   "Office 文档处理助手",    true,  true,  true,  true,  null, 0.3f, 0.95f);
         yield return new("LTAI-ScrumMaster", "Scrum Master 协调者", true,  false, true,  false, null, 0.2f, 0.9f);
+        yield return new("LTAI-Explore", "仓库探索助手(FastContext)", true,  false, true,  false, null, 0.2f, 0.95f);
     }
 }

@@ -9,33 +9,38 @@ public sealed class PipelineRunner
     private readonly IReadOnlyList<StepEntry> _postSteps;
     private readonly ILogger<PipelineRunner> _logger;
 
+    /// <summary>Default post-generation step order (name → execution index).</summary>
+    private static readonly Dictionary<string, int> DefaultStepOrder = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["MemoryCaching(Save)"] = 0,
+        ["Compaction"] = 1,
+        ["GrammarCheck"] = 2,
+        ["QualityGate"] = 3,
+        ["DoDCheck"] = 4,
+        ["Retrospective"] = 5,
+    };
+
     private sealed record StepEntry(
         string Name,
         Func<MessageContext, Task<MessageContext>> Execute,
         bool EnabledByDefault);
 
+    /// <summary>
+    /// DI-friendly constructor: collects all registered <see cref="IPipelineStep"/>
+    /// instances and orders them by <see cref="DefaultStepOrder"/>.
+    /// Steps not in the order map are skipped.
+    /// </summary>
     public PipelineRunner(
-        MemoryCachingStep? memoryCachingSave = null,
-        CompactionStep? compaction = null,
-        GrammarCheckStep? grammarCheck = null,
-        QualityGateStep? qualityGate = null,
-        DoDCheckStep? doDCheck = null,
-        RetrospectiveStep? retrospective = null,
+        IEnumerable<IPipelineStep> steps,
         ILogger<PipelineRunner>? logger = null)
     {
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<PipelineRunner>.Instance;
 
-        var steps = new List<StepEntry>
-        {
-            new("MemoryCaching(Save)", ctx => memoryCachingSave?.ProcessAsync(ctx) ?? Task.FromResult(ctx), memoryCachingSave != null),
-            new("Compaction", ctx => compaction?.ProcessAsync(ctx) ?? Task.FromResult(ctx), compaction != null),
-            new("GrammarCheck", ctx => grammarCheck?.ProcessAsync(ctx) ?? Task.FromResult(ctx), grammarCheck != null),
-            new("QualityGate", ctx => qualityGate?.ProcessAsync(ctx) ?? Task.FromResult(ctx), qualityGate != null),
-            new("DoDCheck", ctx => doDCheck?.ProcessAsync(ctx) ?? Task.FromResult(ctx), doDCheck != null),
-            new("Retrospective", ctx => retrospective?.ProcessAsync(ctx) ?? Task.FromResult(ctx), retrospective != null),
-        };
-
-        _postSteps = steps.AsReadOnly();
+        _postSteps = steps
+            .Where(s => DefaultStepOrder.ContainsKey(s.Name))
+            .OrderBy(s => DefaultStepOrder[s.Name])
+            .Select(s => new StepEntry(s.Name, s.ProcessAsync, true))
+            .ToList();
     }
 
     public async Task<MessageContext> RunPostGenerationAsync(MessageContext context)

@@ -22,6 +22,22 @@ public sealed class SystemTools
     [ToolExample("今天的日期")]
     [ToolExample("what day is it")]
     [ToolExample("what time is it")]
+    [Description("coreutils `date` — 获取当前日期时间（同 GetCurrentDateTime）。")]
+    public static string date() => GetCurrentDateTime();
+
+    [Description("coreutils `uname` — 获取系统信息（同 SystemInfo）。")]
+    public static string uname() => SystemInfo();
+
+    [Description("coreutils `uptime` — 系统运行时间。")]
+    public static string uptime()
+    {
+        var ts = TimeSpan.FromMilliseconds(Environment.TickCount64);
+        return $"{ts.Days}d {ts.Hours}h {ts.Minutes}m {ts.Seconds}s";
+    }
+
+    [Description("coreutils `whoami` — 当前用户名。")]
+    public static string whoami() => Environment.UserName;
+
     [Description("REQUIRED: Get the ACTUAL current date and time from the system clock. ALWAYS call this tool when the user asks what day it is, what time it is, today's date, or the current weekday. Do NOT guess or estimate the date.")]
     public static string GetCurrentDateTime()
     {

@@ -19,7 +19,7 @@ namespace LTAI.Core.Configuration;
 public static class SecretManager
 {
     /// <summary>Optional logger set by DI during startup for DPAPI failure diagnostics.</summary>
-    public static ILogger? Logger { get; set; }
+    internal static ILogger? Logger { get; set; }
 
     private static readonly ConcurrentDictionary<string, (string? value, DateTime cached)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);

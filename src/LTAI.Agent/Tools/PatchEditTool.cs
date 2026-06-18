@@ -63,9 +63,10 @@ public sealed class PatchEditTool
                         var replaced = false;
                         for (int i = 0; i < result.Count; i++)
                         {
-                            if (result[i].Contains(old))
+                            var idx = result[i].IndexOf(old, StringComparison.Ordinal);
+                            if (idx >= 0)
                             {
-                                result[i] = result[i].Replace(old, replacement);
+                                result[i] = result[i][..idx] + replacement + result[i][(idx + old.Length)..];
                                 replaced = true;
                                 break;
                             }

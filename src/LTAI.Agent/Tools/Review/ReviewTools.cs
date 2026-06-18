@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.AI;
 using LTAI.Agent.Memory;
+using LTAI.Agent.Utils;
 using LibGit2Sharp;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -29,7 +30,6 @@ public sealed class ReviewTools
     private readonly IChatClient? _llm;
     private readonly IReadOnlyList<AITool>? _allTools;
     private const int MaxFileReadSize = 2_000_000;
-    private static readonly ConcurrentDictionary<string, Regex> s_globCache = new();
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = false,
@@ -62,10 +62,7 @@ public sealed class ReviewTools
         {
             _ruleEngine.LoadProjectRules(_ws);
         }
-        catch
-        {
-            // Project rules are optional
-        }
+        catch (Exception) { System.Diagnostics.Debug.WriteLine("[ReviewTools] Project rules not loaded"); }
     }
 
     /// <summary>Load custom review rules from JSON string (4-layer chain: builtin → project → custom → ad-hoc).</summary>
@@ -814,10 +811,7 @@ public sealed class ReviewTools
                     return $"review-{repo.Head.FriendlyName}";
             }
         }
-        catch
-        {
-            // non-critical, best-effort
-        }
+        catch (Exception) { System.Diagnostics.Debug.WriteLine("[ReviewTools] Non-critical error"); }
         return $"review-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}";
     }
 
@@ -1113,7 +1107,7 @@ public sealed class ReviewTools
                     repo.Commit($"chore(gates): freeze audit gates for {name} ({openFindings.Count} findings)", new Signature("LTAI-Review", "review@ltai", DateTimeOffset.Now), new Signature("LTAI-Review", "review@ltai", DateTimeOffset.Now));
                 }
             }
-            catch { /* git not available or no changes */ }
+            catch (Exception) { System.Diagnostics.Debug.WriteLine("[ReviewTools] Git not available"); }
         }
 
         return $"Frozen {openFindings.Count} gates → {gatePath}" +
@@ -1171,10 +1165,7 @@ public sealed class ReviewTools
                     if (root.TryGetProperty("line", out var l)) line = l.GetString();
                     if (root.TryGetProperty("category", out var c)) cat = c.GetString();
                 }
-                catch
-                {
-                    // non-critical, best-effort
-                }
+                catch (Exception) { System.Diagnostics.Debug.WriteLine("[ReviewTools] Non-critical error"); }
             }
 
             // Apply filters
@@ -1279,10 +1270,7 @@ public sealed class ReviewTools
                         sb.AppendLine($"| {t.At} | {t.From} | {t.To} | {t.By ?? "-"} | {t.Summary ?? "-"} |");
                 }
             }
-            catch
-            {
-                // non-critical, best-effort
-            }
+            catch (Exception) { System.Diagnostics.Debug.WriteLine("[ReviewTools] Non-critical error"); }
         }
 
         return sb.ToString();
@@ -1328,10 +1316,7 @@ public sealed class ReviewTools
                     if (root.TryGetProperty("line", out var l)) line = l.GetString();
                     if (root.TryGetProperty("category", out var c)) cat = c.GetString();
                 }
-                catch
-                {
-                    // non-critical, best-effort
-                }
+                catch (Exception) { System.Diagnostics.Debug.WriteLine("[ReviewTools] Non-critical error"); }
             }
             if (statusFilterSet != null && !statusFilterSet.Contains(st)) continue;
             if (!string.IsNullOrEmpty(severity) && !string.Equals(sev, severity, StringComparison.OrdinalIgnoreCase)) continue;
@@ -1387,10 +1372,7 @@ public sealed class ReviewTools
                     if (root.TryGetProperty("category", out var c)) cat = c.GetString() ?? "?";
                     if (root.TryGetProperty("file", out var f)) file = f.GetString() ?? "?";
                 }
-                catch
-                {
-                    // non-critical, best-effort
-                }
+                catch (Exception) { System.Diagnostics.Debug.WriteLine("[ReviewTools] Non-critical error"); }
             }
             if (!string.IsNullOrEmpty(severity) && !string.Equals(sev, severity, StringComparison.OrdinalIgnoreCase)) continue;
             if (!string.IsNullOrEmpty(fileFilter) && !GlobMatch(file, fileFilter)) continue;
@@ -1493,10 +1475,7 @@ public sealed class ReviewTools
                         _ => kv.Value.ToString(),
                     };
         }
-        catch
-        {
-            // non-critical, best-effort
-        }
+        catch (Exception) { System.Diagnostics.Debug.WriteLine("[ReviewTools] Non-critical error"); }
         return meta;
     }
 
@@ -1607,10 +1586,7 @@ public sealed class ReviewTools
         {
             // Not a git repository — normal for non-git directories
         }
-        catch (Exception)
-        {
-            // Other git errors (corrupt repo, permission denied, etc.)
-        }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ReviewTools] Git error: {ex.Message}"); }
 
         return files;
     }
@@ -1621,8 +1597,8 @@ public sealed class ReviewTools
         if (!pattern.Contains('*') && !pattern.Contains('?'))
             return name == pattern || path == pattern;
 
-        var regex = s_globCache.GetOrAdd(pattern, p =>
-            new Regex("^" + Regex.Escape(p).Replace("\\*", ".*").Replace("\\?", ".") + "$",
+        var regex = RegexCache.GetOrAddFactory($"rv:{pattern}", () =>
+            new Regex("^" + Regex.Escape(pattern).Replace("\\*", ".*").Replace("\\?", ".") + "$",
                 RegexOptions.Compiled | RegexOptions.IgnoreCase));
         return regex.IsMatch(name) || regex.IsMatch(path);
     }
