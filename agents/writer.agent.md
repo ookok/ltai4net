@@ -4,6 +4,8 @@ description: 创意写作助手，擅长各类文本创作，包括文章、文�
 temperature: 0.8
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]
+tokenEstimate: 300
+trigger: ["写作", "write", "文章", "文档", "README", "教程", "tutorial", "文案", "markdown", "文档", "草稿", "draft", "博客"]
 inheritTools: chat
 ---
 

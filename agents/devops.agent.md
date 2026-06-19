@@ -4,6 +4,8 @@ description: DevOps 助手，负责构建脚本、Docker 容器、CI/CD 配置�
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]
+tokenEstimate: 350
+trigger: ["DevOps", "CI/CD", "Docker", "容器", "container", "部署", "deploy", "构建", "build", "自动化", "自动化部署", "Jenkins", "GitHub Actions", "k8s", "Kubernetes", "发布", "publish", "运维"]
 tools: [shell, container, system, network, filesystem, search, git, download, job, build, publish]
 ---
 

@@ -4,6 +4,8 @@ description: 测试助手，负责测试编写、覆盖率分析和测试执行�
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]
+tokenEstimate: 400
+trigger: ["测试", "test", "单元测试", "unit test", "集成测试", "integration test", "覆盖率", "coverage", "xUnit", "NUnit", "MSTest", "mock", "stub", "TDD", "测试用例", "test case", "测试覆盖", "test coverage"]
 tools: [filesystem, shell, search, symbols, git, plan, subagent, task, job, build]
 ---
 

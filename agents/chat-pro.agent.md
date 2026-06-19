@@ -3,6 +3,7 @@ name: LTAI-Chat-Pro
 description: 深度推理助手(Pro)，使用 Pro 模型处理复杂任务。擅长跨文件重构、并发安全分析、复杂算法实现、性能瓶颈诊断。
 temperature: 0.3
 topP: 0.95
+tokenEstimate: 250
 modelId: l2
 permissions: ["read", "write", "list", "exec"]
 inheritTools: chat

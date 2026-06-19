@@ -62,6 +62,46 @@ public sealed class QueryClassifier
     public bool IsGreetingOnly(string task) => IsGreetingOnlyStatic(task);
 
     /// <summary>
+    /// Detect casual/simple queries that don't need heavy provider context.
+    /// Examples: "ok", "thanks", "继续", "what's next?", "go on", "yes", "no".
+    /// These are short follow-ups or acknowledgments, not substantive requests.
+    /// </summary>
+    public bool IsCasualQuery(string task)
+    {
+        if (string.IsNullOrWhiteSpace(task)) return false;
+        var trimmed = task.Trim();
+
+        // Already handled by greeting detection — don't double-match
+        if (IsGreetingOnlyStatic(trimmed)) return false;
+
+        // Very short queries (< 20 chars) with no tool keywords are likely casual
+        if (trimmed.Length <= 20)
+        {
+            foreach (var keyword in ToolKeywords)
+                if (trimmed.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            return true;
+        }
+
+        // Known casual patterns
+        var lower = trimmed.ToLowerInvariant();
+        var casualPatterns = new[]
+        {
+            "what's next", "what next", "go on", "continue", "继续",
+            "yes", "no", "ok", "okay", "sure", "好的", "行",
+            "tell me more", "接着说", "然后呢", "还有吗",
+            "i see", "明白了", "懂了", "got it",
+            "can you explain", "请解释", "什么意思",
+            "what does that mean", "why", "为什么",
+            "how does it work", "怎么用",
+        };
+        if (casualPatterns.Any(p => lower.Contains(p)))
+            return true;
+
+        return false;
+    }
+
+    /// <summary>
     /// Static fast-path greeting check (no DI needed). Used by callers that
     /// cannot inject QueryClassifier (e.g. static helper methods, ExpertRouterAgent).
     /// </summary>

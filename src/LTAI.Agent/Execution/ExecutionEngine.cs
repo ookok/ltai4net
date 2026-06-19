@@ -37,6 +37,7 @@ public sealed class ExecutionEngine : IExecutionEngine
     private readonly AgentWorkflows _agentWorkflows;
     private readonly DecisionTreeRouter? _router;
     private readonly QueryClassifier? _queryClassifier;
+    private readonly TriggerMatcher? _triggerMatcher;
     private readonly ILogger<ExecutionEngine> _logger;
 
     /// <summary>Fired for each completed step during execution.</summary>
@@ -46,11 +47,13 @@ public sealed class ExecutionEngine : IExecutionEngine
         AgentWorkflows agentWorkflows,
         DecisionTreeRouter? router = null,
         ILogger<ExecutionEngine>? logger = null,
-        QueryClassifier? queryClassifier = null)
+        QueryClassifier? queryClassifier = null,
+        TriggerMatcher? triggerMatcher = null)
     {
         _agentWorkflows = agentWorkflows;
         _router = router;
         _queryClassifier = queryClassifier;
+        _triggerMatcher = triggerMatcher;
         _logger = logger ?? NullLogger<ExecutionEngine>.Instance;
     }
 
@@ -68,6 +71,50 @@ public sealed class ExecutionEngine : IExecutionEngine
                 Query: query,
                 Branch: "GreetingFastPath",
                 Confidence: 0.95f);
+        }
+
+        // Phase 1.2: Casual query detection (zap-inspired)
+        // Short acknowledgments, simple follow-ups, status checks — skip heavy providers.
+        // These don't need the full provider chain (KbGraph, CgGraph, deep search, etc.)
+        if (IsCasualQuery(query))
+        {
+            _logger.LogDebug("PlanAsync: casual query detected, planning lightweight path");
+            return new ExecutionPlan(
+                Steps: [new HandoffStep("__casual__")],
+                Query: query,
+                Branch: "CasualFastPath",
+                Confidence: 0.85f);
+        }
+
+        // Phase 1.5: Trigger keyword matching (zap-inspired skill injection)
+        // Check if any agent's trigger keywords match the query.
+        // When triggers match, route directly to the best-matched agent.
+        // This is cheaper and more precise than vector embedding routing.
+        if (_triggerMatcher != null)
+        {
+            var triggerMatches = _triggerMatcher.Match(query, maxResults: 2);
+            if (triggerMatches.Count > 0)
+            {
+                var topMatch = triggerMatches[0];
+                _logger.LogInformation(
+                    "PlanAsync: trigger match '{Agent}' (score={Score:F2}, est={Est} tokens) for query: {Query}",
+                    topMatch.AgentName, topMatch.MatchScore, topMatch.TokenEstimate,
+                    query[..Math.Min(query.Length, 60)]);
+
+                // Route to the best-matched agent
+                var steps = triggerMatches
+                    .Select(m => (WorkflowStep)new HandoffStep(m.AgentName)
+                    {
+                        Name = $"handoff:{m.AgentName}"
+                    })
+                    .ToList();
+
+                return new ExecutionPlan(
+                    Steps: steps,
+                    Query: query,
+                    Branch: "TriggerMatch",
+                    Confidence: topMatch.MatchScore);
+            }
         }
 
         // Phase 2: Use DecisionTreeRouter for vector routing
@@ -155,6 +202,38 @@ public sealed class ExecutionEngine : IExecutionEngine
                     Duration = DateTime.UtcNow - startTime,
                     Success = response != null,
                     WasGreetingFastPath = true,
+                };
+            }
+
+            // Handle casual fast-path (short/simple queries, no heavy providers)
+            if (plan.Steps.Count == 1 &&
+                plan.Steps[0] is HandoffStep casualHs &&
+                casualHs.SpecialistName == "__casual__")
+            {
+                var span = ExecutionSpan.Start("casual", "handoff", traceId: plan.TraceId);
+                // Use the base chat agent with minimal context for casual replies
+                var response = await _agentWorkflows.RunHandoffAsync(
+                    plan.Query, plan.TraceId, ct).ConfigureAwait(false);
+
+                var text = response.Messages?.LastOrDefault()?.Text ?? "";
+                var completedSpan = span.Complete();
+                spans.Add(completedSpan);
+                OnSpan?.Invoke(completedSpan);
+
+                return new ExecutionResult
+                {
+                    Messages = response.Messages?.Count > 0
+                        ? response.Messages.ToList().AsReadOnly()
+                        : Array.Empty<Microsoft.Extensions.AI.ChatMessage>(),
+                    Text = text,
+                    StepOutputs = new Dictionary<string, string>
+                    {
+                        ["casual"] = text
+                    },
+                    Spans = spans,
+                    Duration = DateTime.UtcNow - startTime,
+                    Success = true,
+                    WasGreetingFastPath = false,
                 };
             }
 
@@ -339,5 +418,23 @@ public sealed class ExecutionEngine : IExecutionEngine
 
         var trimmed = query.Trim().ToLowerInvariant();
         return trimmed.Length <= 10;
+    }
+
+    private bool IsCasualQuery(string query)
+    {
+        if (_queryClassifier != null)
+            return _queryClassifier.IsCasualQuery(query);
+
+        // Fallback: short queries that aren't greetings but have no tool keywords
+        var trimmed = query.Trim();
+        if (trimmed.Length is > 10 and <= 25)
+        {
+            var lower = trimmed.ToLowerInvariant();
+            var toolWords = new[] { "写", "读", "删", "创", "搜索", "查找", "执行", "运行",
+                "write", "read", "delete", "create", "search", "find", "run", "execute",
+                "代码", "文件", "数据库", "测试", "build", "deploy" };
+            return !toolWords.Any(t => lower.Contains(t));
+        }
+        return false;
     }
 }

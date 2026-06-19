@@ -3,6 +3,7 @@ name: LTAI-Chat
 description: 通用对话助手，处理日常综合任务，包括问答、写作、代码、数据分析、文件操作等。具备完整工具集，能自动选择最合适的专业 agent 处理复杂任务。
 temperature: 0.3
 topP: 0.95
+tokenEstimate: 200
 modelId: l1
 permissions: ["read", "write", "list", "exec"]
 tools: [filesystem, shell, search, symbols, eia, web, media, office, memory, git, plan, diagram, choice, subagent, task, job, system, network, container, download, workflow]

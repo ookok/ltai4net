@@ -3,6 +3,8 @@ name: LTAI-DCI
 description: 直接语料交互助手(DCI) — 用终端工具(rg/find/read)直接搜索原始语料，零索引、零向量库。适合精确词法搜索、多步假设验证、私有知识库深度研究
 temperature: 0.3
 topP: 0.95
+tokenEstimate: 300
+trigger: ["DCI", "直接语料", "语料搜索", "精确搜索", "原始数据", "rg ", "grep", "find ", "多步验证", "假设验证"]
 modelId: l1
 permissions: ["read", "list", "exec"]
 tools: [filesystem, shell, search, plan, task, download]

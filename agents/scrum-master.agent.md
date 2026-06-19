@@ -4,6 +4,8 @@ description: Scrum Master 协调者，负责任务分配、进度追踪、阻塞
 temperature: 0.2
 topP: 0.9
 permissions: ["read", "list"]
+tokenEstimate: 300
+trigger: ["Scrum", "任务分配", "进度", "sprint", "站会", "standup", "阻塞", "blocker", "协调", "协调者", "任务追踪", "任务管理"]
 tools: [search, plan, task, job]
 ---
 

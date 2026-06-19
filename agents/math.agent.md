@@ -4,6 +4,8 @@ description: 数学计算助手，擅长数值计算、符号运算、统计分�
 temperature: 1.0
 topP: 0.95
 permissions: ["exec"]
+tokenEstimate: 400
+trigger: ["数学", "math", "计算", "数值", "统计分析", "statistics", "概率", "probability", "方程", "equation", "数值计算", "符号运算", "SymPy", "NumPy", "代数", "微积分", "积分", "导数"]
 tools: [shell, container]
 ---
 

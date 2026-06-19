@@ -86,9 +86,10 @@ internal static partial class AgentBuilder
                 var workflows = sp.GetRequiredService<LTAI.Agent.Workflows.AgentWorkflows>();
                 var router = sp.GetService<LTAI.Agent.Workflows.DecisionTreeRouter>();
                 var queryClassifier = sp.GetService<Memory.QueryClassifier>();
+                var triggerMatcher = sp.GetService<Memory.TriggerMatcher>();
                 LTAI.Agent.Tools.PlanTools.ExecutionEngine = new Execution.ExecutionEngine(
                     workflows, router, loggerFactory.CreateLogger<Execution.ExecutionEngine>(),
-                    queryClassifier: queryClassifier);
+                    queryClassifier: queryClassifier, triggerMatcher: triggerMatcher);
             }
             catch { /* ExecutionEngine not available — PlanTools runs standalone */ }
         }
@@ -130,6 +131,10 @@ internal static partial class AgentBuilder
         IChatClient guardedLlm = new LTAI.Agent.Clients.ThinkingTagValidator(
             new LTAI.Agent.Clients.ProgressGuardChatClient(llm));
 
+        // P0.2: LLM I/O logging (zap-inspired, enabled via LTAI_LLM_LOG=true)
+        var ltaiOptions = sp.GetService<Microsoft.Extensions.Options.IOptions<LTAIOptions>>()?.Value;
+        guardedLlm = new LTAI.Agent.Clients.LlmLoggingChatClient(guardedLlm, ltaiOptions);
+
         // MAF-aligned: ToolFilteringChatClient runs at IChatClient level (after all AIContextProviders).
         // Replaces ToolRetrievalProvider's AIContextProvider approach which had ordering issues with
         // HarnessAgent's built-in providers (FileAccessProvider, BackgroundAgentsProvider).
@@ -163,7 +168,7 @@ internal static partial class AgentBuilder
         RegisterClusterAndDeepenTools(tools, name, sp);
         RegisterNewDomainTools(tools, name, canExec, canRead, canWrite, ws, sp, yamlTools);
         RegisterExploreTools(tools, name, ws);
-        RegisterTextProcessingTools(tools, name, canRead);
+        RegisterTextProcessingTools(tools, name, canRead, ws);
         RegisterDelegationTools(tools, name, sp);
         RegisterSessionLineageTools(tools, name, sp);
         RegisterBuildAndPublishTools(tools, name, ws, canExec);

@@ -77,6 +77,7 @@ public static partial class ServiceCollectionExtensions
         services.AddSingleton<AdaptiveBeamTraverser>();
         services.AddSingleton<IntentRouter>();
         services.AddSingleton<QueryClassifier>();
+        services.AddSingleton<TriggerMatcher>();
         services.AddSingleton<SalienceBudgetCompressor>();
 
         return services;

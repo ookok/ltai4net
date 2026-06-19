@@ -4,6 +4,8 @@ description: 代码分析助手，专注于阅读、理解和修改代码。擅�
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list"]
+tokenEstimate: 350
+trigger: ["代码", "重构", "debug", "bug", "class", "interface", "函数", "方法", "代码审查", "pull request", "重构", "refactor", "实现", "implement", "写一个", "创建文件", "修改", "修复", "error", "crash", "panic", "exception", "堆栈", "异常"]
 tools: [filesystem, search, symbols, office, git, plan, diagram, task, download, build]
 ---
 

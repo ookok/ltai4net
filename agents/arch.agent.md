@@ -4,6 +4,8 @@ description: 架构审查助手，评估模块划分、依赖方向、扩展性�
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "list"]
+tokenEstimate: 350
+trigger: ["架构", "architecture", "依赖", "dependency", "模块", "module", "分层", "layer", "耦合", "coupling", "设计模式", "pattern", "重构方案", "技术方案", "方案评审", "扩展性", "scalability"]
 tools: [search, symbols, filesystem, git, plan, diagram, subagent, office]
 ---
 

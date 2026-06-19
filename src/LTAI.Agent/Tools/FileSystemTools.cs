@@ -168,6 +168,8 @@ public sealed class FileSystemTools
         if (_writeBuf != null)
         {
             await _writeBuf.WriteAsync(fp, content).ConfigureAwait(false);
+            var isNew = !File.Exists(fp);
+            EditLedger.Default.RecordEdit(fp, isNew);
             return $"Written {content.Length} bytes to {Path.GetFileName(fp)}";
         }
 
@@ -177,7 +179,9 @@ public sealed class FileSystemTools
         try
         {
             await File.WriteAllTextAsync(tmp, content).ConfigureAwait(false);
+            var isNew = !File.Exists(fp);
             File.Move(tmp, fp, overwrite: true);
+            EditLedger.Default.RecordEdit(fp, isNew);
         }
         catch
         {

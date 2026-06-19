@@ -4,6 +4,8 @@ description: 安全审计助手，检测注入、密钥泄露、配置风险。�
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list"]
+tokenEstimate: 350
+trigger: ["安全", "security", "漏洞", "vulnerability", "SQL注入", "XSS", "CSRF", "认证", "authentication", "授权", "authorization", "权限", "permission", "加密", "encryption", "密码", "password", "token", "JWT", "OWASP", "CVE", "密钥", "secret", "api key", "xxe", "ssrf", "安全审计"]
 tools: [search, filesystem, shell, web, eia, git, plan, diagram, memory]
 ---
 

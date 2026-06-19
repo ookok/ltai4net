@@ -4,6 +4,8 @@ description: API 设计助手，负责 REST/GraphQL 接口设计、契约测试�
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]
+tokenEstimate: 300
+trigger: ["API", "REST", "GraphQL", "端点", "endpoint", "接口", "契约", "OpenAPI", "Swagger", "HTTP", "微服务", "microservice", "集成", "integration"]
 tools: [web, search, filesystem, shell, git, plan, subagent, network]
 ---
 

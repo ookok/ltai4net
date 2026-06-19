@@ -4,6 +4,8 @@ description: 纯对话助手，无任何工具权限。仅使用模型本身的�
 temperature: 0.8
 topP: 0.95
 permissions: []
+tokenEstimate: 150
+trigger: ["对话", "闲聊", "hello", "嗨", "你好", "你是谁", "who are you", "聊天", "talk"]
 tools: []
 ---
 

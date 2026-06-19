@@ -4,6 +4,8 @@ description: 代码审查助手，专注于 PR Review、差异分析和代码质
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "list"]
+tokenEstimate: 300
+trigger: ["review", "审查", "CR", "code review", "PR", "pull request", "差异", "diff", "代码质量", "quality", "lgtm", "critique", "评审"]
 tools: [git, search, symbols, filesystem, plan, diagram, subagent, review, memory]
 ---
 

@@ -31,7 +31,9 @@ internal static class AgentDefinitionLoader
         float? Temperature,
         float? TopP,
         string? Prompt = null,
-        string[] Tools = null!)
+        string[] Tools = null!,
+        string[]? Trigger = null,
+        int TokenEstimate = 0)
     {
         public AIAgent? Build(IServiceProvider sp, string name)
         {
@@ -99,7 +101,9 @@ internal static class AgentDefinitionLoader
                     Temperature: def.Temperature is >= -2 and <= 2 ? (float?)def.Temperature : null,
                     TopP: (float?)def.TopP,
                     Prompt: def.Prompt,
-                    Tools: tools);
+                    Tools: tools,
+                    Trigger: def.Trigger.Length > 0 ? def.Trigger : null,
+                    TokenEstimate: def.TokenEstimate);
             }
             // Internal router agent (not from files) — used by AgentWorkflows for handoff routing
             yield return new("LTAI-Router", "任务调度器(无工具)", false, false, false, false, null, 0.3f, 0.95f, Prompt: null);

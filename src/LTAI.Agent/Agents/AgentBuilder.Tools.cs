@@ -77,6 +77,15 @@ partial class AgentBuilder
             : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Frontend"))
         { tools.Add(AIFunctionFactory.Create(codeAnalysis.GetSymbols)); tools.Add(AIFunctionFactory.Create(codeAnalysis.FindInCode)); }
 
+        // ── Compact code map (zap-inspired: token-efficient file outline) ──
+        if (canRead)
+        {
+            System.Func<string, int, Task<string>> codeMapFn = (path, maxFiles) =>
+                CodeMap.GetMapAsync(ws, path, Math.Clamp(maxFiles, 1, 50));
+            tools.Add(AIFunctionFactory.Create(codeMapFn, "CodeMap",
+                "Get a compact structural outline of a file or directory. Returns class/struct/interface/method/enum symbols with line numbers in a token-efficient format (~40% smaller than GetSymbols). Parameters: path (file or directory), maxFiles (1-50, default 20). Preferred over GetSymbols for quick overviews."));
+        }
+
         // ── Graph-powered tools (Gortex-inspired: impact, compact query, contracts) ──
         if (canRead)
         {
@@ -449,7 +458,7 @@ partial class AgentBuilder
         tools.Add(AIFunctionFactory.Create(explore.Tree));
     }
 
-    static void RegisterTextProcessingTools(ToolSet tools, string name, bool canRead)
+    static void RegisterTextProcessingTools(ToolSet tools, string name, bool canRead, string ws)
     {
         if (!canRead) return;
         tools.Add(AIFunctionFactory.Create(TextProcessingTools.tail));
@@ -462,6 +471,12 @@ partial class AgentBuilder
         tools.Add(AIFunctionFactory.Create(TextProcessingTools.du));
         tools.Add(AIFunctionFactory.Create(TextProcessingTools.df));
         tools.Add(AIFunctionFactory.Create(TextProcessingTools.seq));
+
+        // Project init tool (zap-inspired /init)
+        var initService = new ProjectInitService(ws);
+        System.Func<Task<string>> initFn = () => initService.InitAsync();
+        tools.Add(AIFunctionFactory.Create(initFn, "InitProject",
+            "One-click project initialization. Detects project type (dotnet/node/rust/python/go), creates LTAI.md context file, and returns build/test commands. Run once when starting on a new project."));
     }
 
     static void RegisterDebugTools(ToolSet tools, string name, IServiceProvider sp)

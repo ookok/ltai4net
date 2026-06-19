@@ -4,6 +4,8 @@ description: 仓库探索助手（FastContext 范式），将探索与求解分�
 temperature: 0.2
 topP: 0.95
 permissions: ["read", "list"]
+tokenEstimate: 250
+trigger: ["探索", "explore", "搜索", "查找", "找文件", "在哪里", "where", "find", "search", "代码库", "仓库", "有哪些", "list", "文件结构"]
 tools: [filesystem, search, explore]
 ---
 仓库探索助手 — 将探索与求解分离（FastContext 范式）。

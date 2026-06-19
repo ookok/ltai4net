@@ -4,6 +4,8 @@ description: 调试排障助手，负责崩溃分析、日志排查、性能瓶�
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]
+tokenEstimate: 300
+trigger: ["debug", "崩溃", "crash", "异常", "exception", "堆栈", "stack trace", "panic", "性能", "performance", "慢", "slow", "卡顿", "stuck", "hang", "死锁", "deadlock", "内存泄漏", "memory leak", "OOM", "超时", "timeout", "排查", "排障", "诊断", "日志", "log"]
 tools: [shell, search, system, network, filesystem, symbols, git, task, memory]
 ---
 

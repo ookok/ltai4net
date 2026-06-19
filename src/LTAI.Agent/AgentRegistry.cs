@@ -27,6 +27,12 @@ public sealed record AgentFileDef
     /// <summary>Cached embedding vector for semantic routing.</summary>
     public float[]? Embedding { get; init; }
 
+    /// <summary>Trigger keywords that activate this agent. Injected only when user query matches.</summary>
+    public string[] Trigger { get; init; } = [];
+
+    /// <summary>Estimated token cost when this agent's prompt is injected (0 = unknown).</summary>
+    public int TokenEstimate { get; init; }
+
     /// <summary>Text used for embedding — combines description + tools.</summary>
     public string CapabilityText =>
         $"{Description} | tools: {string.Join(", ", Tools)} | {Prompt.Truncate(500)}";
@@ -293,6 +299,9 @@ public sealed class AgentRegistry : IAgentRegistry
                 case "tools":         def = def with { Tools = ParseJsonArray(rawVal) ?? def.Tools }; break;
                 case "dod":           def = def with { DoD = val }; break;
                 case "wipLimit":      if (int.TryParse(val, out var w)) def = def with { WipLimit = w }; break;
+                case "trigger":       def = def with { Trigger = ParseJsonArray(rawVal) ?? def.Trigger }; break;
+                case "tokenestimate":
+                case "token_estimate": if (int.TryParse(val, out var te)) def = def with { TokenEstimate = te }; break;
             }
         }
         return def;

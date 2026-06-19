@@ -93,6 +93,7 @@ internal static class AgentContextProviderBuilder
             new CacheAlignerProvider(
                 loggerFactory.CreateLogger<CacheAlignerProvider>()),
             new LspDiagnosticsProvider(sp.GetRequiredService<LanguageServer.LspLanguageManager>()),
+            new EditLedgerProvider(EditLedger.Default, maxTokens: 200),
         };
         // Safety coordinator at position 1 (between SkillRankingProvider and MemoryAuthorityProvider)
         if (safety != null)

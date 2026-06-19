@@ -1,4 +1,5 @@
 using LTAI.Agent.Context;
+using LTAI.Agent.Indexing;
 using LTAI.Agent.Prompts;
 using LTAI.Agent.Vector;
 using LTAI.AI;
@@ -125,6 +126,43 @@ public static partial class ServiceCollectionExtensions
             var embedder = sp.GetService<EmbeddingClient>();
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<CgGraph>();
             return new CgGraph(store, llm, embedder, logger, Directory.GetCurrentDirectory());
+        });
+
+        // HyGRAG 社区摘要缓存 + 混合图查询
+        services.AddSingleton<CommunitySummaryStore>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            return new CommunitySummaryStore(
+                opts.ResolveDataPath("community_summaries.db"),
+                sp.GetService<ILogger<CommunitySummaryStore>>());
+        });
+        services.AddSingleton<HybridGraphQuery>(sp =>
+        {
+            var kbGraph = sp.GetRequiredService<KbGraph>();
+            var store = sp.GetRequiredService<CommunitySummaryStore>();
+            var logger = sp.GetService<ILogger<HybridGraphQuery>>();
+            return new HybridGraphQuery(kbGraph, store, logger);
+        });
+
+        // ── SAG-inspired services: dynamic hyperedges, event extraction, dual-mode search ──
+        services.AddSingleton<DynamicHyperedgeQuery>(sp =>
+        {
+            var kgStore = sp.GetRequiredService<KgStore>();
+            var logger = sp.GetService<ILogger<DynamicHyperedgeQuery>>();
+            return new DynamicHyperedgeQuery(kgStore, logger);
+        });
+        services.AddSingleton<EventExtractor>(sp =>
+        {
+            var kgStore = sp.GetRequiredService<KgStore>();
+            var logger = sp.GetService<ILogger<EventExtractor>>();
+            return new EventExtractor(kgStore, logger);
+        });
+        services.AddSingleton<DualModeSearch>(sp =>
+        {
+            var kgStore = sp.GetRequiredService<KgStore>();
+            var hyperedge = sp.GetRequiredService<DynamicHyperedgeQuery>();
+            var logger = sp.GetService<ILogger<DualModeSearch>>();
+            return new DualModeSearch(kgStore, hyperedge, logger);
         });
 
         return services;

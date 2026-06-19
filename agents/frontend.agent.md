@@ -4,6 +4,8 @@ description: 前端网页开发助手，擅长 React/Vue/Angular 等现代前端
 temperature: 0.8
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]
+tokenEstimate: 350
+trigger: ["前端", "frontend", "React", "Vue", "Angular", "CSS", "HTML", "组件", "component", "UI", "样式", "style", "页面", "page", "界面", "界面设计", "布局", "layout", "TypeScript", "tsx", "jsx", "npm", "yarn", "webpack", "vite"]
 tools: [filesystem, shell, search, symbols, media, git, plan, diagram, choice, subagent, task, job, container, download]
 ---
 

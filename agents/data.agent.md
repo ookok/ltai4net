@@ -4,6 +4,8 @@ description: 数据处理助手，专注于数据采集、清洗、分析和可�
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]
+tokenEstimate: 350
+trigger: ["数据", "data", "CSV", "Excel", "JSON", "分析", "分析数据", "图表", "chart", "可视化", "visualization", "报表", "report", "数据处理", "清洗", "数据清洗", "ETL"]
 tools: [filesystem, shell, search, eia, web, media, office, git, plan, diagram, job, container, download]
 ---
 

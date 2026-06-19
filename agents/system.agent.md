@@ -4,6 +4,8 @@ description: 系统管理助手，负责系统状态监控、网络诊断、环�
 temperature: 0.3
 topP: 0.95
 permissions: ["exec"]
+tokenEstimate: 300
+trigger: ["系统", "system", "进程", "process", "监控", "monitor", "网络诊断", "网络", "network", "环境配置", "环境变量", "env", "系统信息", "磁盘", "disk", "CPU", "内存", "memory"]
 tools: [shell, search, eia, media, memory, system, network, task, job, container]
 ---
 

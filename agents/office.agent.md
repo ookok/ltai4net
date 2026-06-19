@@ -4,6 +4,8 @@ description: Office 文档生成助手，生成 Word/Excel/PPT 文档。擅长�
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]
+tokenEstimate: 300
+trigger: ["Office", "Word", "Excel", "PPT", "文档", "docx", "xlsx", "pptx", "模板", "template", "报表生成", "表格"]
 tools: [filesystem, shell, search, office, git, plan, diagram, subagent, task]
 ---
 

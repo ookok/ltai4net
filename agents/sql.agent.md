@@ -3,6 +3,8 @@ name: LTAI-SQL
 description: 数据库查询助手，用自然语言生成 SQL 并查询。支持 MySQL/PostgreSQL/SQLite，擅长复杂查询优化、数据迁移、性能调优。
 temperature: 0.3
 topP: 0.95
+tokenEstimate: 300
+trigger: ["SQL", "数据库", "database", "查询", "query", "SELECT", "INSERT", "UPDATE", "DELETE", "JOIN", "索引", "index", "迁移", "migration", "MySQL", "PostgreSQL", "SQLite", "数据表", "table", "schema", "表结构"]
 inheritTools: chat
 permissions: ["read", "list"]
 ---

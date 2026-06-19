@@ -4,6 +4,8 @@ description: 架构规划师（只读），负责任务拆解、方案设计与�
 temperature: 0.5
 topP: 0.95
 permissions: ["read", "list"]
+tokenEstimate: 300
+trigger: ["计划", "plan", "方案", "设计", "架构", "拆解", "步骤", "step", "里程碑", "milestone", "实施计划", "project plan", "todo", "任务分配"]
 tools: [search, plan, read, arch, filesystem]
 ---
 

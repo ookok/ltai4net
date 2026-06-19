@@ -390,8 +390,10 @@ public sealed class TextTools
         var tmp = path + ".tmp." + Guid.NewGuid().ToString("N")[..8];
         try
         {
+            var isNew = !File.Exists(path);
             await File.WriteAllTextAsync(tmp, content).ConfigureAwait(false);
             File.Move(tmp, path, overwrite: true);
+            EditLedger.Default.RecordEdit(path, isNew);
         }
         catch
         {
