@@ -10,7 +10,7 @@
     <PackageVersion Include="System.ClientModel" Version="1.14.0" />
     <PackageVersion Include="ModelContextProtocol" Version="1.4.0" />
     <PackageVersion Include="OpenAI" Version="2.11.0" />
-    <PackageVersion Include="Anthropic" Version="12.27.0" />
+    <PackageVersion Include="Anthropic" Version="12.29.1" />
     <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.21.0" />
     <PackageVersion Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.21.0" />
     <PackageVersion Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.21.0" />
