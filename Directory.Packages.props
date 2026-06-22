@@ -51,8 +51,8 @@
     <PackageVersion Include="Avalonia.Diagnostics" Version="11.3.17" />
     <PackageVersion Include="Avalonia.Headless" Version="12.0.4" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-    <PackageVersion Include="MessagePack" Version="2.5.205" />
-    <PackageVersion Include="StreamJsonRpc" Version="2.25.25" />
+    <PackageVersion Include="MessagePack" Version="2.5.302" />
+    <PackageVersion Include="StreamJsonRpc" Version="2.25.29" />
 
     <!-- Code Analysis -->
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
