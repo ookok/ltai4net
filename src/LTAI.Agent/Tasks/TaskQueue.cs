@@ -23,6 +23,7 @@
 //    - Background work that survives only until process exit
 // ═══════════════════════════════════════════════════════════════
 
+using LTAI.Core.Configuration;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading;
@@ -130,7 +131,7 @@ public sealed class TaskQueue : IAsyncDisposable
         _maxRetries = Math.Max(0, maxRetries);
         _logger = logger;
         _defaultTaskTimeout = taskTimeout ?? TimeSpan.FromMinutes(10);
-        var queueCap = int.TryParse(Environment.GetEnvironmentVariable("LTAI_TASK_QUEUE_MAX"), out var qc) ? Math.Max(100, qc) : -1;
+        var queueCap = EnvironmentConfig.TaskQueueMax;
         _channels = new Channel<TaskItem>[4];
         for (int i = 0; i < 4; i++)
         {

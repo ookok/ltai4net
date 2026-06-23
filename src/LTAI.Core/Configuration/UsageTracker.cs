@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using LTAI.Core.Caching;
 
 namespace LTAI.Core.Configuration;
 
@@ -22,10 +23,12 @@ public sealed class UsageTracker : IUsageTracker
     /// <summary>
     /// Per-model pricing overrides (¥/1M tokens) for cost calculation.
     /// Priority: metadataResolver > PerModelPricing > KnownKeys.All.
-    /// The optional <paramref name="s_priceResolver"/> allows ModelMetadataProvider
-    /// to supply per-model pricing from models-dev-providers.json.
     /// </summary>
-    public static Func<string, (decimal PriceIn, decimal PriceOut, decimal PriceInCache)?>? s_priceResolver;
+    private Func<string, (decimal PriceIn, decimal PriceOut, decimal PriceInCache)?>? _priceResolver;
+
+    /// <summary>Set the per-model price resolver (called from DI setup).</summary>
+    public void SetPriceResolver(Func<string, (decimal PriceIn, decimal PriceOut, decimal PriceInCache)?>? resolver)
+        => _priceResolver = resolver;
     internal static readonly Dictionary<string, (decimal PriceIn, decimal PriceOut, decimal PriceInCache)> PerModelPricing = new(StringComparer.OrdinalIgnoreCase)
     {
         ["deepseek-v4-flash"] = (1.0m, 2.0m, 0.02m),
@@ -112,7 +115,11 @@ public sealed class UsageTracker : IUsageTracker
     private string _balanceSource = "";
     private static readonly HttpClient _balanceHttp = new() { Timeout = TimeSpan.FromSeconds(5) };
     private readonly object _balanceLock = new();
-    private static readonly ConcurrentDictionary<string, int> _modelContextCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly LTAICache<string, int> _modelContextCache = new(new LTAICacheOptions
+    {
+        MaxEntries = 128,
+        DefaultTtl = TimeSpan.FromMinutes(30)
+    });
     private long _failedTurns;
     private string? _lastFailureReason;
 
@@ -135,10 +142,10 @@ public sealed class UsageTracker : IUsageTracker
     private static KnownKeys.KeyInfo? _lastLookupKey;
     private static readonly object _lookupLock = new();
 
-    private static KnownKeys.KeyInfo? LookupModel(string model)
+    private KnownKeys.KeyInfo? LookupModel(string model)
     {
         if (string.IsNullOrEmpty(model)) return null;
-        if (s_priceResolver?.Invoke(model) is { } fromMeta)
+        if (_priceResolver?.Invoke(model) is { } fromMeta)
         {
             return new KnownKeys.KeyInfo(
                 "", "Meta", "", null, null, model, fromMeta.PriceIn, fromMeta.PriceOut, fromMeta.PriceInCache);
@@ -395,9 +402,9 @@ public sealed class UsageTracker : IUsageTracker
                 var id = model.GetProperty("id").GetString();
                 if (id == null) continue;
                 if (model.TryGetProperty("max_context_length", out var ctx))
-                    _modelContextCache[id] = ctx.GetInt32();
+                    Default._modelContextCache.Set(id, ctx.GetInt32());
                 else if (model.TryGetProperty("context_length", out var ctx2))
-                    _modelContextCache[id] = ctx2.GetInt32();
+                    Default._modelContextCache.Set(id, ctx2.GetInt32());
             }
         }
         catch { /* best-effort */ }
@@ -409,7 +416,7 @@ public sealed class UsageTracker : IUsageTracker
         var modelKey = _activeModel;
         if (string.IsNullOrEmpty(modelKey))
             modelKey = "deepseek-v4-flash";
-        var modelLimit = _modelContextCache.TryGetValue(modelKey, out var cached)
+        var modelLimit = _modelContextCache.TryGet(modelKey, out var cached)
             ? cached
             : KnownContextWindows.TryGetValue(modelKey, out var known) ? known : 0;
         return Math.Max(modelLimit, _contextWindowSize);

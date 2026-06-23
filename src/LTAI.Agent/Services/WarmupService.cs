@@ -28,12 +28,14 @@ public sealed class WarmupService : IHostedService
     private readonly EmbeddingClient _embedder;
     private readonly PalaceStore? _palaceStore;
     private readonly ToolEmbeddingCache? _toolCache;
+    private readonly IToolRegistry _toolRegistry;
     private readonly ILogger<WarmupService> _logger;
 
     public WarmupService(
         IServiceProvider sp,
         KbGraph kbGraph,
         EmbeddingClient embedder,
+        IToolRegistry toolRegistry,
         PalaceStore? palaceStore = null,
         ToolEmbeddingCache? toolCache = null,
         ILogger<WarmupService>? logger = null)
@@ -41,6 +43,7 @@ public sealed class WarmupService : IHostedService
         _sp = sp;
         _kbGraph = kbGraph;
         _embedder = embedder;
+        _toolRegistry = toolRegistry;
         _palaceStore = palaceStore;
         _toolCache = toolCache;
         _logger = logger ?? NullLogger<WarmupService>.Instance;
@@ -72,7 +75,7 @@ public sealed class WarmupService : IHostedService
 
     private async Task WarmupToolRegistryAsync(CancellationToken ct)
     {
-        if (ToolRegistry.IsInitialized)
+        if (_toolRegistry.IsInitialized)
         {
             _logger.LogDebug("WarmupService: ToolRegistry already initialized, skipping");
             return;
@@ -93,7 +96,7 @@ public sealed class WarmupService : IHostedService
         {
             _logger.LogInformation("WarmupService: initializing ToolRegistry with {Count} tools...", tools.Count);
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            await ToolRegistry.InitializeAsync(tools, _embedder, _toolCache, ct).ConfigureAwait(false);
+            await _toolRegistry.InitializeAsync(tools, _embedder, _toolCache, ct).ConfigureAwait(false);
             sw.Stop();
             _logger.LogInformation("WarmupService: ToolRegistry initialized in {Ms}ms", sw.ElapsedMilliseconds);
         }

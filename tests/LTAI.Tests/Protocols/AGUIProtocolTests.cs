@@ -78,9 +78,9 @@ public class AGUIProtocolTests
     [Fact]
     public void AGUIEndpoint_PathPattern_IsCorrect()
     {
-        var agentName = "LTAI-Code";
+        var agentName = "LTAI-Dev";
         var expectedPath = $"/agui/{agentName}";
-        Assert.Equal("/agui/LTAI-Code", expectedPath);
+        Assert.Equal("/agui/LTAI-Dev", expectedPath);
     }
 
     [Fact]

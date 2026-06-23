@@ -21,8 +21,7 @@ public sealed class CompressionStore : IDisposable
     private readonly object _gate = new();
     private long _totalEntries;
     private long _storeCount;
-    private static readonly TimeSpan MaxEntryAge = TimeSpan.FromDays(
-        int.TryParse(Environment.GetEnvironmentVariable("LTAI_COMPRESSION_MAX_AGE_DAYS"), out var d) ? Math.Max(1, d) : 30);
+    private static readonly TimeSpan MaxEntryAge = TimeSpan.FromDays(EnvironmentConfig.CompressionMaxAgeDays);
 
     public CompressionStore(string dbPath)
     {

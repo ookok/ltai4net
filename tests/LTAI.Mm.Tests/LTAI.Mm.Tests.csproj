@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" VersionOverride="17.13.0" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" VersionOverride="3.0.2">

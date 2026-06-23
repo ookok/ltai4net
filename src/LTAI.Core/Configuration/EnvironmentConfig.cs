@@ -51,6 +51,18 @@ public static class EnvironmentConfig
     public static int ReachIndexMaxEdges => Overrides?.ReachIndexMaxEdges ?? ReadEnvInt("LTAI_REACH_INDEX_MAX_EDGES", -1);
     public static int RateLimitCleanupMin => Overrides?.RateLimitCleanupMin ?? ReadEnvInt("LTAI_RATE_LIMIT_CLEANUP_MIN", 5);
 
+    // ── Model selection (string overrides) ──
+    public static string? L1Model => Overrides?.L1Model ?? Environment.GetEnvironmentVariable("LTAI_L1_MODEL");
+    public static string? L2Model => Overrides?.L2Model ?? Environment.GetEnvironmentVariable("LTAI_L2_MODEL");
+    public static string? L3Model => Overrides?.L3Model ?? Environment.GetEnvironmentVariable("LTAI_L3_MODEL");
+
+    // ── Feature flags ──
+    public static string SandboxMode => Overrides?.SandboxMode ?? Environment.GetEnvironmentVariable("LTAI_SANDBOX_MODE") ?? "local";
+    public static bool DevMode => Overrides?.DevMode ?? string.Equals(Environment.GetEnvironmentVariable("LTAI_DEV_MODE"), "true", StringComparison.OrdinalIgnoreCase);
+    public static bool LlmLogEnabled => Overrides?.LlmLogEnabled ?? Environment.GetEnvironmentVariable("LTAI_LLM_LOG") is "1" or "true";
+    public static string? EmbeddingModelsDir => Overrides?.EmbeddingModelsDir ?? Environment.GetEnvironmentVariable("LTAI_EMBEDDING_MODELS_DIR");
+    public static string? WebApiKey => Overrides?.WebApiKey ?? Environment.GetEnvironmentVariable("LTAI_API_KEY");
+
     // ── Other ──
     public static int GreetingMaxLength => Overrides?.GreetingMaxLength ?? ReadEnvInt("LTAI_GREETING_MAX_LENGTH", 15);
     public static int OfficeMaxOutputChars => Overrides?.OfficeMaxOutputChars ?? ReadEnvInt("LTAI_OFFICE_MAX_OUTPUT_CHARS", 100000);
@@ -116,6 +128,18 @@ public sealed class EnvironmentOverrides
     public int? ReachIndexMaxNodes { get; init; }
     public int? ReachIndexMaxEdges { get; init; }
     public int? RateLimitCleanupMin { get; init; }
+
+    // Model
+    public string? L1Model { get; init; }
+    public string? L2Model { get; init; }
+    public string? L3Model { get; init; }
+
+    // Feature flags
+    public string? SandboxMode { get; init; }
+    public bool? DevMode { get; init; }
+    public bool? LlmLogEnabled { get; init; }
+    public string? EmbeddingModelsDir { get; init; }
+    public string? WebApiKey { get; init; }
 
     // Other
     public int? GreetingMaxLength { get; init; }

@@ -91,8 +91,8 @@ public sealed class ComposedWorkflowRegistry
         Description = "生成 → 评审 → 修改循环",
         Parameters =
         [
-            new() { Name = "author_agent", Type = "agent_name", Default = "LTAI-Code", Description = "生成 Agent" },
-            new() { Name = "reviewer_agent", Type = "agent_name", Default = "LTAI-Review", Description = "评审 Agent" },
+            new() { Name = "author_agent", Type = "agent_name", Default = "LTAI-Dev", Description = "生成 Agent" },
+            new() { Name = "reviewer_agent", Type = "agent_name", Default = "LTAI-QA", Description = "评审 Agent" },
             new() { Name = "max_iterations", Type = "integer", Default = "3", Description = "最大迭代次数" },
         ],
         Graph = new WorkflowGraphIR
@@ -122,8 +122,8 @@ public sealed class ComposedWorkflowRegistry
         Parameters =
         [
             new() { Name = "planner_agent", Type = "agent_name", Default = "LTAI-Arch", Description = "架构 Agent" },
-            new() { Name = "coder_agent", Type = "agent_name", Default = "LTAI-Code", Description = "编码 Agent" },
-            new() { Name = "reviewer_agent", Type = "agent_name", Default = "LTAI-Review", Description = "评审 Agent" },
+            new() { Name = "coder_agent", Type = "agent_name", Default = "LTAI-Dev", Description = "编码 Agent" },
+            new() { Name = "reviewer_agent", Type = "agent_name", Default = "LTAI-QA", Description = "评审 Agent" },
         ],
         Graph = new WorkflowGraphIR
         {
@@ -149,7 +149,7 @@ public sealed class ComposedWorkflowRegistry
         Parameters =
         [
             new() { Name = "debater_agents", Type = "string", Default = "LTAI-Chat,LTAI-Data", Description = "辩论者(逗号分隔)" },
-            new() { Name = "arbiter_agent", Type = "agent_name", Default = "LTAI-Chat-Pro", Description = "仲裁者" },
+            new() { Name = "arbiter_agent", Type = "agent_name", Default = "LTAI-Chat", Description = "仲裁者" },
         ],
         Graph = new WorkflowGraphIR
         {

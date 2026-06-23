@@ -48,8 +48,7 @@ public sealed class LlmLoggingChatClient : IChatClient
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
 
-        var enabled = Environment.GetEnvironmentVariable("LTAI_LLM_LOG");
-        _enabled = enabled == "1" || string.Equals(enabled, "true", StringComparison.OrdinalIgnoreCase);
+        _enabled = LTAI.Core.Configuration.EnvironmentConfig.LlmLogEnabled;
 
         if (_enabled)
         {

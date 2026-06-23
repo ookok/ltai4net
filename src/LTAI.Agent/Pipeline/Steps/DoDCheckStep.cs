@@ -43,17 +43,17 @@ public sealed class DoDCheckStep : IPipelineStep
 
         if (failedCriteria.Count > 0)
         {
-            context.Set("DoDBlocked", true);
+            context.DoDBlocked = true;
             context.Set("DoDFailedCriteria", failedCriteria);
 
             var msg = $"⚠️ Definition of Done 未通过: {string.Join(", ", failedCriteria)}";
-            context.Messages.Add(new ChatMessage(ChatRole.System, msg));
+            lock (context.MessagesLock) context.Messages.Add(new ChatMessage(ChatRole.System, msg));
 
             _logger.LogWarning("DoD failed: {Criteria}", string.Join(", ", failedCriteria));
         }
         else
         {
-            context.Set("DoDBlocked", false);
+            context.DoDBlocked = false;
             _logger.LogInformation("DoD passed all {Count} criteria", dod.Criteria.Count);
         }
 
@@ -62,7 +62,7 @@ public sealed class DoDCheckStep : IPipelineStep
 
     private Task<bool> CheckNoSyntaxErrorsAsync(MessageContext context)
     {
-        var hasErrors = context.TryGet<bool>("GrammarCheckBlocked", out var blocked) && blocked;
+        var hasErrors = context.GrammarCheckBlocked;
         return Task.FromResult(!hasErrors);
     }
 

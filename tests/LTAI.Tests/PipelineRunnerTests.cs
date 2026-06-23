@@ -78,7 +78,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.False(ctx.TryGet<bool>("GrammarCheckBlocked", out _));
+        Assert.False(ctx.GrammarCheckBlocked);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.True(ctx.TryGet<bool>("GrammarCheckBlocked", out _));
+        Assert.True(ctx.GrammarCheckBlocked);
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.False(ctx.TryGet<bool>("GrammarCheckBlocked", out _));
+        Assert.False(ctx.GrammarCheckBlocked);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.False(ctx.TryGet<bool>("GrammarCheckBlocked", out _));
+        Assert.False(ctx.GrammarCheckBlocked);
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         Assert.True(ctx.SafetyBlocked);
         Assert.Equal("test block", ctx.SafetyReason);
-        Assert.False(ctx.TryGet<bool>("GrammarCheckBlocked", out _));
+        Assert.False(ctx.GrammarCheckBlocked);
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.False(ctx.TryGet<bool>("GrammarCheckBlocked", out _));
+        Assert.False(ctx.GrammarCheckBlocked);
     }
 
     [Fact]
@@ -193,7 +193,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.True(ctx.TryGet<bool>("GrammarCheckBlocked", out _));
+        Assert.True(ctx.GrammarCheckBlocked);
     }
 
     [Fact]
@@ -210,7 +210,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.False(ctx.TryGet<bool>("QualityGateBlocked", out _));
+        Assert.False(ctx.QualityGateBlocked);
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.False(ctx.TryGet<bool>("DoDBlocked", out _));
+        Assert.False(ctx.DoDBlocked);
     }
 
     [Fact]
@@ -254,7 +254,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.False(ctx.TryGet<bool>("GrammarCheckBlocked", out _));
+        Assert.False(ctx.GrammarCheckBlocked);
     }
 
     [Fact]
@@ -270,7 +270,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.True(ctx.TryGet<bool>("GrammarCheckBlocked", out _));
+        Assert.True(ctx.GrammarCheckBlocked);
     }
 
     [Fact]
@@ -307,7 +307,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.True(ctx.TryGet<bool>("DoDBlocked", out _));
+        Assert.True(ctx.DoDBlocked);
     }
 
     [Fact]
@@ -321,11 +321,11 @@ public sealed class PipelineRunnerTests : IDisposable
 
         var ctx = new MessageContext("write test.cs", CancellationToken.None);
         ctx.ToolCalls.Add(("write", $"path={filePath}", "ok"));
-        ctx.Messages.Add(new(ChatRole.Assistant, "I don't know the answer"));
+        ctx.Messages.Add(new(ChatRole.Assistant, "I'm not sure"));
 
         ctx = await runner.RunPostGenerationAsync(ctx);
 
-        Assert.True(ctx.TryGet<bool>("QualityGateBlocked", out _));
+        Assert.True(ctx.QualityGateBlocked);
     }
 
     [Fact]
@@ -347,7 +347,7 @@ public sealed class PipelineRunnerTests : IDisposable
 
         // QualityGate passes (no quality issue in conflict markers)
         // DoDCheck runs next and detects the conflict
-        Assert.False(ctx.TryGet<bool>("QualityGateBlocked", out _));
-        Assert.True(ctx.TryGet<bool>("DoDBlocked", out _));
+        Assert.False(ctx.QualityGateBlocked);
+        Assert.True(ctx.DoDBlocked);
     }
 }

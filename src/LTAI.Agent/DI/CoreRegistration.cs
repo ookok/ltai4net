@@ -75,6 +75,18 @@ public static partial class ServiceCollectionExtensions
                 sp.GetService<ILogger<CodeAnalysis.TreeSitterParser>>()));
         services.AddSingleton<LanguageServer.LspLanguageManager>();
 
+        // EditLedger: per-session file edit tracker with static forwarder for tool callers.
+        services.AddSingleton<EditLedger>(sp =>
+        {
+            var ledger = new EditLedger();
+            EditLedger.SetDefault(ledger);
+            return ledger;
+        });
+
+        // AgentContextProviderBuilder: resolves common DI services via constructor,
+        // leaving only per-agent params for the Build() call.
+        services.AddSingleton<AgentContextProviderBuilder>();
+
         return services;
     }
 
@@ -91,7 +103,8 @@ public static partial class ServiceCollectionExtensions
         services.AddKeyedSingleton<KgStore>("cg", (sp, _) =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
-            return new KgStore(opts.ResolveDataPath("cg.db"));
+            // Phase 1.1: merged from cg.db → kg.db (both use KgStore schema)
+            return new KgStore(opts.ResolveDataPath("kg.db"));
         });
 
         services.AddSingleton<Glove50Embedder>();
@@ -128,21 +141,9 @@ public static partial class ServiceCollectionExtensions
             return new CgGraph(store, llm, embedder, logger, Directory.GetCurrentDirectory());
         });
 
-        // HyGRAG 社区摘要缓存 + 混合图查询
-        services.AddSingleton<CommunitySummaryStore>(sp =>
-        {
-            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
-            return new CommunitySummaryStore(
-                opts.ResolveDataPath("community_summaries.db"),
-                sp.GetService<ILogger<CommunitySummaryStore>>());
-        });
-        services.AddSingleton<HybridGraphQuery>(sp =>
-        {
-            var kbGraph = sp.GetRequiredService<KbGraph>();
-            var store = sp.GetRequiredService<CommunitySummaryStore>();
-            var logger = sp.GetService<ILogger<HybridGraphQuery>>();
-            return new HybridGraphQuery(kbGraph, store, logger);
-        });
+        // HyGRAG 社区摘要缓存 + 混合图查询 (TODO: implement CommunitySummaryStore + HybridGraphQuery)
+        // services.AddSingleton<CommunitySummaryStore>(sp => { ... });
+        // services.AddSingleton<HybridGraphQuery>(sp => { ... });
 
         // ── SAG-inspired services: dynamic hyperedges, event extraction, dual-mode search ──
         services.AddSingleton<DynamicHyperedgeQuery>(sp =>

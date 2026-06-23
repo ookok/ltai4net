@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Threading;
 using LTAI.Core;
+using LTAI.Core.Configuration;
 
 namespace LTAI.Agent.Tools;
 
@@ -45,14 +46,11 @@ public sealed class BackgroundJobService : IDisposable, IAsyncDisposable
         int? expirationSeconds = null, int? maxOutputChars = null,
         int? maxConcurrentJobs = null, int? processTimeoutSeconds = null)
         : this(
-            expirationSeconds ?? ReadEnvInt("LTAI_JOB_EXPIRATION_SEC", 60),
-            maxOutputChars ?? ReadEnvInt("LTAI_JOB_MAX_OUTPUT_CHARS", 100_000),
-            maxConcurrentJobs ?? ReadEnvInt("LTAI_JOB_MAX_CONCURRENT", 10),
-            processTimeoutSeconds ?? ReadEnvInt("LTAI_JOB_PROCESS_TIMEOUT_SEC", 300))
+            expirationSeconds ?? EnvironmentConfig.JobExpirationSec,
+            maxOutputChars ?? EnvironmentConfig.JobMaxOutputChars,
+            maxConcurrentJobs ?? EnvironmentConfig.JobMaxConcurrent,
+            processTimeoutSeconds ?? EnvironmentConfig.JobProcessTimeoutSec)
     { }
-
-    private static int ReadEnvInt(string key, int fallback) =>
-        int.TryParse(Environment.GetEnvironmentVariable(key), out var v) ? Math.Max(1, v) : fallback;
 
     private BackgroundJobService(int expirationSeconds, int maxOutputChars,
         int maxConcurrentJobs, int processTimeoutSeconds)

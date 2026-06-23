@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Runtime.CompilerServices;
@@ -25,6 +26,7 @@ public sealed class MultiProviderChatClient : IChatClient
     private readonly ILogger<MultiProviderChatClient> _logger;
     private readonly int _perProviderTimeoutSec;
     private volatile string? _lastError;
+    private readonly ConcurrentDictionary<string, bool> _thinkingProviders = new(StringComparer.OrdinalIgnoreCase);
 
     // LLM call counter
     private static long _callCounter;
@@ -61,12 +63,28 @@ public sealed class MultiProviderChatClient : IChatClient
         if (options.AI.DegradationChain != null)
         {
             foreach (var (k, v) in options.AI.DegradationChain)
+            {
                 _providers.Register(k, null!); // seed chain; clients registered via Register()
+                // Also set degradation chain on ProviderClientManager if not already configured
+                if (!_providers.HasDegradation(k))
+                    _providers.SetDegradation(k, v);
+            }
         }
     }
 
     /// <summary>Register a named IChatClient instance.</summary>
-    public void Register(string name, IChatClient client) => _providers.Register(name, client);
+    public void Register(string name, IChatClient client, bool enableThinking = false)
+    {
+        _providers.Register(name, client);
+        if (enableThinking)
+            _thinkingProviders[name] = true;
+    }
+
+    /// <summary>Register an edge (local inference) IChatClient. Edge providers are tried first in routing.</summary>
+    public void RegisterEdge(string name, IChatClient client)
+    {
+        _providers.RegisterEdge(name, client);
+    }
 
     public string ResolveProvider(ChatOptions? options) => _providers.ResolveProvider(options);
 
@@ -131,6 +149,7 @@ public sealed class MultiProviderChatClient : IChatClient
 
             // Dedup tools
             options = DedupTools(options);
+            options = ApplyThinkingOptions(options, p);
 
             // Notify of fallback
             if (lastFailedProvider != null)
@@ -251,6 +270,7 @@ public sealed class MultiProviderChatClient : IChatClient
             try
             {
                 options = DedupTools(options);
+                options = ApplyThinkingOptions(options, p);
 
                 var callNum = Interlocked.Increment(ref _callCounter);
                 var toolCount = options?.Tools?.Count ?? 0;
@@ -336,6 +356,19 @@ public sealed class MultiProviderChatClient : IChatClient
         }
         return new ChatResponse(new ChatMessage(ChatRole.Assistant,
             $"All providers failed for '{provider}'. Last error: {_lastError ?? "(unknown)"}"));
+    }
+
+    private ChatOptions? ApplyThinkingOptions(ChatOptions? options, string provider)
+    {
+        if (!_thinkingProviders.ContainsKey(provider)) return options;
+        if (options == null)
+        {
+            options = new ChatOptions();
+        }
+        options.AdditionalProperties ??= [];
+        options.AdditionalProperties["enable_thinking"] = true;
+        options.AdditionalProperties["thought_in_content"] = true;
+        return options;
     }
 
     private static ChatOptions? DedupTools(ChatOptions? options)

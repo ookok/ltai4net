@@ -70,7 +70,7 @@
   <Target Name="DownloadRipgrep" BeforeTargets="Build" Condition="$([MSBuild]::IsOSPlatform('Windows')) And !Exists('$(ToolsDir)rg\rg.exe')">
     <Message Text="DownloadRipgrep: downloading rg.exe to $(ToolsDir)rg/" Importance="High" />
     <MakeDir Directories="$(ToolsDir)rg/" />
-    <Exec Command="powershell -NoProfile -Command &quot;$wc=New-Object Net.WebClient; $wc.Headers.Add('User-Agent','LTAI/1.0'); $wc.DownloadFile('http://mogoo.com.cn/rg.exe','$(ToolsDir)rg\rg.exe'); if (Test-Path '$(ToolsDir)rg\rg.exe') { Write-Host 'rg.exe downloaded' } else { Write-Host 'download failed'; exit 1 }&quot;" IgnoreExitCode="true" />
+    <Exec Command="powershell -NoProfile -Command &quot;$wc=New-Object Net.WebClient; $wc.Headers.Add('User-Agent','LTAI/1.0'); $wc.DownloadFile('https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/rg.exe','$(ToolsDir)rg\rg.exe'); if (Test-Path '$(ToolsDir)rg\rg.exe') { Write-Host 'rg.exe downloaded' } else { Write-Host 'download failed'; exit 1 }&quot;" IgnoreExitCode="true" />
   </Target>
 
 </Project>

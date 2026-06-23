@@ -33,9 +33,11 @@ public sealed class LookaheadProviderSelector : AIContextProvider
     // ── Per-conversation classification cache ──
     // Dynamic boundary caching: tracks skip accuracy per provider to decide
     // when to bypass classification (MGPO-inspired: focus on uncertain predictions).
+    // Protected by _cacheLock for thread safety across concurrent pipeline calls.
     private string? _lastQuery;
     private float[]? _lastQueryVec;
     private HashSet<string>? _lastDomains;
+    private readonly object _cacheLock = new();
 
     /// <summary>Provider skip accuracy tracker: name → (predicted correct, total skips)</summary>
     private static readonly ConcurrentDictionary<string, (int Correct, int Total)> SkipAccuracy
@@ -193,7 +195,7 @@ public sealed class LookaheadProviderSelector : AIContextProvider
                 return await ClassifyAndSkipAsync("general", ct).ConfigureAwait(false);
             }
 
-            var domains = await ClassifyAsync(query, ct).ConfigureAwait(false);
+            var (domains, qVec) = await ClassifyAsync(query, ct).ConfigureAwait(false);
 
             var skipList = BuildSkipList(domains);
             if (skipList.Count == 0)
@@ -206,7 +208,6 @@ public sealed class LookaheadProviderSelector : AIContextProvider
 
             // ContextRL: record contrastive feedback for each skip/keep decision
             // so downstream calibration can learn optimal per-domain thresholds.
-            var qVec = _lastQueryVec;
             foreach (var p in AllProviderNames)
             {
                 var skipped = skipList.Contains(p);
@@ -268,14 +269,14 @@ public sealed class LookaheadProviderSelector : AIContextProvider
     }
 
     /// <summary>Compute cosine similarity between current and last query.</summary>
-    private async Task<double> ComputeQuerySimilarityAsync(string query, CancellationToken ct)
+    private async Task<double> ComputeQuerySimilarityAsync(string query, float[]? lastQueryVec, CancellationToken ct)
     {
-        if (_embedder == null || _lastQueryVec == null) return 0;
+        if (_embedder == null || lastQueryVec == null) return 0;
 
         try
         {
             var curVec = await _embedder.GenerateAsync(query, ct).ConfigureAwait(false);
-            return CosineSimilarity(curVec, _lastQueryVec);
+            return CosineSimilarity(curVec, lastQueryVec);
         }
         catch
         {
@@ -298,26 +299,27 @@ public sealed class LookaheadProviderSelector : AIContextProvider
         return (double)common / Math.Max(wordsA.Length, wordsB.Length);
     }
 
-    private async Task<HashSet<string>> ClassifyAsync(string query, CancellationToken ct)
+    private async Task<(HashSet<string> domains, float[]? queryVec)> ClassifyAsync(string query, CancellationToken ct)
     {
         var result = new HashSet<string>();
 
         // ── Conversation-level cache (semantic similarity) ──
-        // Reuse previous classification when the current query is semantically
-        // similar to the last one. Uses cosine similarity on GloVe/ONNX embeddings
-        // when available, falls back to keyword overlap ratio.
-        if (_lastDomains != null && _lastQuery != null && _lastQuery.Length > 0)
+        // Take a snapshot under lock to avoid race with concurrent writes.
+        (string? query, float[]? vec, HashSet<string>? domains) cache;
+        lock (_cacheLock) { cache = (_lastQuery, _lastQueryVec, _lastDomains); }
+
+        if (cache.domains != null && cache.query != null && cache.query.Length > 0)
         {
-            var similarity = await ComputeQuerySimilarityAsync(query, ct).ConfigureAwait(false);
-            var keywordOverlap = ComputeKeywordOverlap(query, _lastQuery);
+            var similarity = await ComputeQuerySimilarityAsync(query, cache.vec, ct).ConfigureAwait(false);
+            var keywordOverlap = ComputeKeywordOverlap(query, cache.query);
 
             if (similarity > 0.65 || keywordOverlap > 0.5)
             {
                 MetricCacheHits.Add(1);
-                return _lastDomains;
+                return (cache.domains, cache.vec);
             }
             // Reset cached vector when topic shifts
-            _lastQueryVec = null;
+            lock (_cacheLock) { _lastQueryVec = null; }
         }
 
         // ── Fast path: keyword matching (no embedding call) ──
@@ -331,15 +333,11 @@ public sealed class LookaheadProviderSelector : AIContextProvider
         if (result.Count == 0)
         {
             result.Add("general");
-            _lastQuery = query;
-            _lastDomains = result;
-            return result;
+            lock (_cacheLock) { _lastQuery = query; _lastDomains = result; }
+            return (result, null);
         }
 
         // ── Embedding refinement: threshold-based (not winner-take-all) ──
-        // Keep ALL domains whose centroid similarity exceeds the threshold.
-        // This handles multi-domain queries correctly (e.g., "review security
-        // of this database migration" → code + security + database).
         if (_embedder?.Local?.Available == true)
         {
             try
@@ -365,15 +363,22 @@ public sealed class LookaheadProviderSelector : AIContextProvider
             }
         }
 
-        _lastQuery = query;
-        _lastDomains = result;
-        // Cache embedding vector for next comparison
-        if (_embedder?.Local?.Available == true || _embedder != null)
+        // Compute embedding for next comparison (outside lock to avoid async-in-lock)
+        float[]? queryVec = null;
+        if (_embedder != null)
         {
-            try { _lastQueryVec = await _embedder.GenerateAsync(query, ct).ConfigureAwait(false); }
-            catch { _lastQueryVec = null; }
+            try { queryVec = await _embedder.GenerateAsync(query, ct).ConfigureAwait(false); }
+            catch { }
         }
-        return result;
+
+        // Update cache atomically under lock
+        lock (_cacheLock)
+        {
+            _lastQuery = query;
+            _lastDomains = result;
+            _lastQueryVec = queryVec;
+        }
+        return (result, queryVec);
     }
 
     private static List<string> BuildSkipList(HashSet<string> domains)

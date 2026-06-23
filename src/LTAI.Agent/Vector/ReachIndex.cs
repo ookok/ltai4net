@@ -8,6 +8,7 @@
 // ═══════════════════════════════════════════════════════
 
 using System.Collections.Concurrent;
+using LTAI.Core.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -57,10 +58,8 @@ public sealed class ReachIndex
     // Static ctor reads env vars
     static ReachIndex()
     {
-        if (int.TryParse(Environment.GetEnvironmentVariable("LTAI_REACH_INDEX_MAX_NODES"), out var n))
-            MaxNodes = n;
-        if (int.TryParse(Environment.GetEnvironmentVariable("LTAI_REACH_INDEX_MAX_EDGES"), out var e))
-            MaxEdges = e;
+        MaxNodes = EnvironmentConfig.ReachIndexMaxNodes;
+        MaxEdges = EnvironmentConfig.ReachIndexMaxEdges;
     }
 
     public async Task BuildAsync(KgStore store, CancellationToken ct = default)

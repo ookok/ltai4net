@@ -26,6 +26,7 @@ using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Caching.Memory;
 using LTAI.Agent.Indexing;
+using LTAI.Core.Configuration;
 using LTAI.Core.Storage;
 using TurboQuant.Core.Packing;
 
@@ -97,8 +98,8 @@ public sealed partial class KgStore : IDisposable
 
     private static void InitConnection(SqliteConnection conn)
     {
-        var mmap = int.TryParse(Environment.GetEnvironmentVariable("LTAI_SQLITE_MMAP_MB"), out var m) ? m * 1048576 : 268435456;
-        var busy = int.TryParse(Environment.GetEnvironmentVariable("LTAI_SQLITE_BUSY_MS"), out var b) ? b : 5000;
+        var mmap = EnvironmentConfig.SqliteMmapMb * 1048576;
+        var busy = EnvironmentConfig.SqliteBusyMs;
         using var pragma = conn.CreateCommand();
         pragma.CommandText = $@"
             PRAGMA journal_mode=WAL;

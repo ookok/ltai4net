@@ -304,6 +304,14 @@ public class AgentRegistryUnitTests
 
 public class SafeShellToolUnitTests
 {
+    static SafeShellToolUnitTests()
+    {
+        ShellSecurity.ApplyConfig(new ShellSecurityConfig
+        {
+            BlockedExes = ["sudo"],
+            DangerousPatterns = ["rm -rf /"],
+        });
+    }
     [Fact]
     public async Task DangerousCommand_ReturnsError()
     {
@@ -690,7 +698,7 @@ public class AgentPrintE2ETests
         var defs = AgentRegistry.LoadAll();
         Assert.NotEmpty(defs);
         Assert.Contains(defs, d => d.Name == "LTAI-Chat");
-        Assert.Contains(defs, d => d.Name == "LTAI-Code");
+        Assert.Contains(defs, d => d.Name == "LTAI-Dev");
     }
 }
 

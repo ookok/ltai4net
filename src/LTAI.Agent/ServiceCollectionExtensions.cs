@@ -9,15 +9,16 @@ namespace LTAI.Agent;
 /// <summary>
 /// Top-level DI registration for the LTAI Agent subsystem.
 ///
-/// Registration is split across 6 partial-class files under DI/ for maintainability.
+/// Registration is split across 7 partial-class files under DI/ for maintainability.
 /// Execution order (do not change — consumers depend on it):
 ///   1. Core (AgentToolStore, AgentRegistry, PromptLoader, agent definitions, durable agents)
 ///   2. Graph infra (KgStore, GloVe, lookup router, contracts, KbGraph, CgGraph)
 ///   3. MoE Experts (7 expert modules, router, fan-out, aggregator)
-///   4. Workflow & Pipeline (AgentWorkflows, DecisionTreeRouter, YAML hot-reload, PipelineRunner)
-///   5. Memory & Persistence (PalaceStore, fallback, consolidation, compression store)
-///   6. Indexing & Tools (DocumentIndexer, CodeChunkIndex, SkillEvolutionEngine)
-///   7. ChatAgent (L1→L2 router, escalation decider)
+///   4. Pipeline (PipelineRunner, 12+ IPipelineStep, ContextOffloader, MermaidStateTracker)
+///   5. Workflow (AgentWorkflows, DecisionTreeRouter, YAML hot-reload, MoA, steer, budget)
+///   6. Memory & Persistence (PalaceStore, fallback, consolidation, compression store)
+///   7. Indexing & Tools (DocumentIndexer, CodeChunkIndex, SkillEvolutionEngine)
+///   8. ChatAgent (L1→L2 router, escalation decider)
 ///
 /// Tool selection, prompt building, and context-provider assembly live in
 /// <see cref="AgentBuilder"/>, <see cref="AgentPromptBuilder"/>, and
@@ -38,6 +39,7 @@ public static partial class ServiceCollectionExtensions
         services.AddLTAIAgentCore(out registeredAgentNames);
         services.AddLTAIAgentGraphInfra();
         services.AddLTAIAgentExperts();
+        services.AddLTAIAgentPipeline();
         services.AddLTAIAgentWorkflows();
         services.AddLTAIAgentMemory();
         services.AddLTAIAgentIndexingAndTools();

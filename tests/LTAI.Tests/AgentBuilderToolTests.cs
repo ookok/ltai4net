@@ -40,7 +40,7 @@ public class AgentBuilderToolTests
     public void RegisterShellTools_ContainsPwsh()
     {
         var tools = InvokeRegister("RegisterFileAndTextTools",
-            ["LTAI-Chat", false, false, false, true, ".", null!, null!]);
+            ["LTAI-Chat", false, false, false, true, ".", null!, null!, null]);
 
         Assert.Contains(tools, t => t.Name == "RunCommand");
     }
@@ -49,7 +49,7 @@ public class AgentBuilderToolTests
     public void RegisterFileTools_ContainsRead()
     {
         var tools = InvokeRegister("RegisterFileAndTextTools",
-            ["LTAI-Chat", true, false, false, false, ".", null!, null!]);
+            ["LTAI-Chat", true, false, false, false, ".", null!, null!, null]);
 
         Assert.Contains(tools, t => t.Name == "ReadFileContent");
     }

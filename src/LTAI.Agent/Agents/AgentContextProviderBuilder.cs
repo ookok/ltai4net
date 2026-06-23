@@ -9,7 +9,6 @@ using LTAI.Core.Safety;
 using LTAI.Core.Specs;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Compaction;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -17,91 +16,100 @@ using Microsoft.Extensions.Options;
 
 namespace LTAI.Agent;
 
-    /// <summary>
-    /// Assembles the 7-layer memory palace + tool RAG + safety coordinator into the
-    /// ordered <see cref="AIContextProvider"/> array that <c>HarnessAgentOptions</c> consumes.
-    ///
-    /// Layer order matters — the harness walks providers in this order on every turn:
-    ///   [0] SkillRankingProvider       — Skill Evolution Engine ranking
-    ///   [1] SafetyCoordinator          — only when <see cref="LTAIOptions.AI.SkipSafetyChecks"/> = false
-    ///   [2] LookaheadProviderSelector  — predicts which providers are needed (LSA-inspired)
-    ///   [3] L0IdentityProvider         — always-loaded identity (~100t)
-    ///   [4] L1EssentialProvider        — 5 most-recent essential memories
-    ///   [5] CompactionProvider         — MAF pipeline compaction
-    ///   [6] CCRProvider                — content compression/retrieval markers
-    ///   [7] KbGraph / CgGraph / CodeChunkIndex / WasmtimeSandbox — on-demand
-    ///   [8] L3OnDemandProvider         — task-relevant memory
-    ///   [9] L4DeepSearchProvider       — semantic deep search
-    ///  [10] L6AgentDiaryProvider       — diary entries
-    ///  [11] ProvenanceProvider         — knowledge provenance tracking
-    ///  [12] InstructionProvider        — per-model instruction hints
-    ///  [13] EnvironmentProvider        — current cwd / OS / runtime
-    ///  [14] skillsProvider             — skills directory contents
-    ///  [15] CacheAlignerProvider       — KV-cache alignment hints
-    ///  [16] LspDiagnosticsProvider     — LSP diagnostics
+/// <summary>
+/// Assembles the 7-layer memory palace + tool RAG + safety coordinator into the
+/// ordered <see cref="AIContextProvider"/> array that <c>HarnessAgentOptions</c> consumes.
 ///
-    /// Note: ToolRetrievalProvider (removed) was replaced by ToolFilteringChatClient
+/// Layer order matters — the harness walks providers in this order on every turn.
+///
+/// Note: ToolRetrievalProvider (removed) was replaced by ToolFilteringChatClient
 /// (a MAF IChatClient middleware) to avoid ordering conflicts with
 /// HarnessAgent's built-in providers (FileAccessProvider, BackgroundAgentsProvider).
 /// Tool filtering now runs at the IChatClient level, after all AIContextProviders
 /// have merged their tools.
 /// </summary>
-internal static class AgentContextProviderBuilder
+internal sealed class AgentContextProviderBuilder
 {
-    public static AIContextProvider[] Build(IServiceProvider sp,
-        ILoggerFactory loggerFactory, string name, string identityText,
+    private readonly IOptions<LTAIOptions> _opts;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly SkillEvolutionEngine _skillEngine;
+    private readonly CompressionStore _compressionStore;
+    private readonly Indexing.ProvenanceProvider _provenance;
+    private readonly LspLanguageManager _lsp;
+    private readonly Glove50Embedder? _glove;
+    private readonly EntropyTracker? _entropy;
+    private readonly EditLedger _editLedger;
+
+    public AgentContextProviderBuilder(
+        IOptions<LTAIOptions> opts,
+        ILoggerFactory loggerFactory,
+        SkillEvolutionEngine skillEngine,
+        CompressionStore compressionStore,
+        Indexing.ProvenanceProvider provenance,
+        LspLanguageManager lsp,
+        EditLedger editLedger,
+        Glove50Embedder? glove = null,
+        EntropyTracker? entropy = null)
+    {
+        _opts = opts;
+        _loggerFactory = loggerFactory;
+        _skillEngine = skillEngine;
+        _compressionStore = compressionStore;
+        _provenance = provenance;
+        _lsp = lsp;
+        _editLedger = editLedger;
+        _glove = glove;
+        _entropy = entropy;
+    }
+
+    public AIContextProvider[] Build(string name, string identityText,
         CompactionProvider compaction, KbGraph kbGraph, CgGraph codeGraph,
-        LTAI.Agent.Indexing.CodeChunkIndex codeChunkIndex, WasmtimeSandbox wasmtimeSandbox,
-        LTAI.AI.EmbeddingClient embedder, LTAI.Agent.Memory.PalaceStore palaceStore,
+        Indexing.CodeChunkIndex codeChunkIndex, WasmtimeSandbox wasmtimeSandbox,
+        EmbeddingClient embedder, PalaceStore palaceStore,
         string identityText2, string? modelId,
-        Microsoft.Agents.AI.AgentSkillsProvider skillsProvider,
+        AgentSkillsProvider skillsProvider,
         SafetyCoordinator? safety)
     {
-        var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
-        var specSvc = new SpecService(opts.ResolveDataPath("specs"));
+        var specSvc = new SpecService(_opts.Value.ResolveDataPath("specs"));
 
         var providers = new List<AIContextProvider>(20)
         {
-            new SkillRankingProvider(
-                sp.GetRequiredService<SkillEvolutionEngine>(),
-                loggerFactory.CreateLogger<SkillRankingProvider>()),
+            new SkillRankingProvider(_skillEngine,
+                _loggerFactory.CreateLogger<SkillRankingProvider>()),
             new MemoryAuthorityProvider(),
             new LookaheadProviderSelector(embedder,
-                loggerFactory.CreateLogger<LookaheadProviderSelector>()),
+                _loggerFactory.CreateLogger<LookaheadProviderSelector>()),
             new L0IdentityProvider(identityText),
-            new L1EssentialProvider(palaceStore, name,
-                sp.GetService<EntropyTracker>(),
-                loggerFactory.CreateLogger<L1EssentialProvider>()),
+            new L1EssentialProvider(palaceStore, name, _entropy,
+                _loggerFactory.CreateLogger<L1EssentialProvider>()),
             new SpecContextProvider(specSvc,
-                loggerFactory.CreateLogger<SpecContextProvider>()),
+                _loggerFactory.CreateLogger<SpecContextProvider>()),
             compaction,
-            new CCRProvider(
-                sp.GetRequiredService<CompressionStore>(),
-                loggerFactory.CreateLogger<CCRProvider>()),
+            new CCRProvider(_compressionStore,
+                _loggerFactory.CreateLogger<CCRProvider>()),
             kbGraph, codeGraph, codeChunkIndex, wasmtimeSandbox,
-            new L3OnDemandProvider(palaceStore,
-                sp.GetService<EntropyTracker>(),
-                loggerFactory.CreateLogger<L3OnDemandProvider>()),
-            new L4DeepSearchProvider(palaceStore, embedder,
-                sp.GetService<EntropyTracker>(),
-                loggerFactory.CreateLogger<L4DeepSearchProvider>()),
+            new L3OnDemandProvider(palaceStore, _entropy,
+                _loggerFactory.CreateLogger<L3OnDemandProvider>()),
+            new L4DeepSearchProvider(palaceStore, embedder, _entropy,
+                _loggerFactory.CreateLogger<L4DeepSearchProvider>()),
             new L6AgentDiaryProvider(palaceStore, name,
-                loggerFactory.CreateLogger<L6AgentDiaryProvider>()),
-            sp.GetRequiredService<LTAI.Agent.Indexing.ProvenanceProvider>(),
+                _loggerFactory.CreateLogger<L6AgentDiaryProvider>()),
+            _provenance,
             new InstructionProvider(modelId),
             new EnvironmentProvider(), skillsProvider,
             new CacheAlignerProvider(
-                loggerFactory.CreateLogger<CacheAlignerProvider>()),
-            new LspDiagnosticsProvider(sp.GetRequiredService<LanguageServer.LspLanguageManager>()),
-            new EditLedgerProvider(EditLedger.Default, maxTokens: 200),
+                _loggerFactory.CreateLogger<CacheAlignerProvider>()),
+            new LspDiagnosticsProvider(_lsp),
+            new EditLedgerProvider(_editLedger, maxTokens: 200),
         };
+
         // Safety coordinator at position 1 (between SkillRankingProvider and MemoryAuthorityProvider)
         if (safety != null)
             providers.Insert(1, safety);
 
         // Warm up LookaheadProviderSelector domain centroids (background, non-blocking)
-        var glove = sp.GetService<Glove50Embedder>();
-        _ = LookaheadProviderSelector.WarmupCentroidsAsync(embedder, glove);
+        if (embedder != null)
+            _ = LookaheadProviderSelector.WarmupCentroidsAsync(embedder, _glove);
 
         return providers.ToArray();
     }

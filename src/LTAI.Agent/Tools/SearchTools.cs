@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using LTAI.AI;
 using LTAI.Agent.Utils;
 using static LTAI.Agent.Utils.DirectoryWalker;
+using LTAI.Core.Configuration;
 
 namespace LTAI.Agent.Tools;
 
@@ -17,7 +18,7 @@ internal static class RipgrepDetector
     private static string? _rgPath;
     internal static bool IsAvailable => _available ??= ProbeRg();
     internal static string? RgPath => _rgPath;
-    internal static string RipgrepDownloadUrl { get; set; } = "http://mogoo.com.cn/rg.exe";
+    internal static string RipgrepDownloadUrl { get; set; } = "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/rg.exe";
     internal static string Suggestion =>
         $"考虑使用 rg(ripgrep) 替代内置搜索，速度更快且支持正则。下载：{RipgrepDownloadUrl}";
 
@@ -269,7 +270,7 @@ public sealed class SearchTools
         var matches = new ConcurrentBag<(string path, int line, string text)>();
         int cpuCount = Environment.ProcessorCount;
 
-        var maxDop = int.TryParse(Environment.GetEnvironmentVariable("LTAI_SEARCH_MAX_DOP"), out var d) ? Math.Max(1, d) : Math.Min(cpuCount, 4);
+        var maxDop = EnvironmentConfig.SearchMaxDop;
         Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = maxDop, CancellationToken = ct }, file =>
         {
             ct.ThrowIfCancellationRequested();

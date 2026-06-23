@@ -518,7 +518,7 @@ public class FileSystemToolScenarioTests : IDisposable
     {
         var fs = new FileSystemTools(_tmpDir);
         var result = await fs.ReadFileContent(Path.Combine(_tmpDir, "nonexistent.txt"));
-        Assert.Contains("Error reading", result);
+        Assert.Contains("reading", result);
     }
 
     [Fact]

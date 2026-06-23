@@ -1,17 +1,14 @@
 // Copyright (c) LTAI. All rights reserved.
 // ═══════════════════════════════════════════════════════════════
-//  ToolExecutionStep — ToolRegistry invocation
+//  ToolExecutionStep — ToolRegistry invocation + tool-call recovery
 //
-//  Phase 3b: wraps the static ToolRegistry to dispatch function
-//  calls and collect results. Modeled after the ProcessContentsAsync
-//  logic from ResponseStreamer (TUI layer).
-//
-//  Note: ToolRegistry is a static class with SearchTopKAsync for
-//  retrieval. Tool execution (FunctionCallContent dispatch) is
-//  handled by the MAF pipeline / IChatClient layer. This step
-//  provides a pipeline hook for pre/post tool processing.
+//  Phase 3b: wraps ToolRegistry to dispatch function calls and
+//  collect results. Includes DeerFlow-inspired tool-call recovery:
+//  when provider interrupts mid-tool-call, injects placeholder results
+//  for dangling call_ids to prevent malformed history errors.
 // ═══════════════════════════════════════════════════════════════
 
+using System.Text.RegularExpressions;
 using LTAI.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -19,28 +16,25 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Agent.Pipeline.Steps;
 
-/// <summary>
-/// Pipeline step that processes FunctionCallContent items from
-/// accumulated messages and records tool execution results.
-///
-/// This replaces the inline ProcessContentsAsync in ResponseStreamer.
-/// It scans the MessageContext for function calls and logs them
-/// for post-processing by downstream steps or the final response builder.
-/// </summary>
 public sealed class ToolExecutionStep : IPipelineStep
 {
     private readonly ILogger<ToolExecutionStep> _logger;
+    private readonly IToolRegistry _toolRegistry;
 
     public string Name => "ToolExecution";
 
-    public ToolExecutionStep(ILogger<ToolExecutionStep>? logger = null)
+    public ToolExecutionStep(IToolRegistry toolRegistry, ILogger<ToolExecutionStep>? logger = null)
     {
+        _toolRegistry = toolRegistry;
         _logger = logger ?? NullLogger<ToolExecutionStep>.Instance;
     }
 
     public Task<MessageContext> ProcessAsync(MessageContext context)
     {
-        // Scan all accumulated messages for FunctionCallContent
+        // ── Phase 1: Detect and recover dangling tool calls ──
+        RecoverDanglingToolCalls(context);
+
+        // ── Phase 2: Scan for tool call/result pairs ──
         foreach (var msg in context.Messages)
         {
             if (msg.Contents == null) continue;
@@ -57,10 +51,9 @@ public sealed class ToolExecutionStep : IPipelineStep
                     _logger.LogInformation("ToolExecutionStep: detected tool call '{Name}'", name);
                     context.ToolCalls.Add((name, args, ""));
 
-                    // Tool execution through ToolRegistry is handled by
-                    // the static ToolRegistry.SearchTopKAsync for retrieval,
-                    // and by the MAF IChatClient / AIFunction pipeline for
-                    // actual function execution.
+                    // Pre-register for recovery: if this call never gets a result,
+                    // the recovery path will fill it in
+                    context.Set($"tool_call_{fc.CallId}", name);
                 }
 
                 if (content is FunctionResultContent frc)
@@ -69,19 +62,89 @@ public sealed class ToolExecutionStep : IPipelineStep
                     _logger.LogDebug("ToolExecutionStep: tool result for '{CallId}', len={Len}",
                         frc.CallId, resultStr.Length);
 
+                    // Mark this call_id as resolved
+                    context.Set($"tool_result_{frc.CallId}", true);
+
                     if (context.ToolCalls.Count > 0)
                     {
                         var last = context.ToolCalls[^1];
                         context.ToolCalls[^1] = (last.Name, last.Arguments, resultStr);
-                        // Record tool call metrics
                         var success = !resultStr.StartsWith("Error", StringComparison.OrdinalIgnoreCase)
                             && !resultStr.Contains("\"success\": false");
-                        ToolRegistry.RecordCall(last.Name, success, 0);
+                        _toolRegistry.RecordCall(last.Name, success, 0);
                     }
                 }
             }
         }
 
         return Task.FromResult(context);
+    }
+
+    /// <summary>
+    /// DeerFlow-inspired tool-call recovery:
+    /// Detect dangling tool calls (provider interrupted mid-loop) and inject
+    /// placeholder results so the next model invocation doesn't fail on
+    /// invalid tool_call_id references.
+    /// </summary>
+    private static void RecoverDanglingToolCalls(MessageContext context)
+    {
+        // Scan messages for "orphaned" FunctionCallContent that lack
+        // a corresponding FunctionResultContent in subsequent messages.
+        var pendingCallIds = new List<(string CallId, string Name)>();
+
+        for (int i = context.Messages.Count - 1; i >= 0; i--)
+        {
+            var msg = context.Messages[i];
+            if (msg.Contents == null) continue;
+
+            foreach (var content in msg.Contents)
+            {
+                if (content is FunctionCallContent fc)
+                {
+                    var callId = fc.CallId ?? "";
+                    // Check if this call already has a result
+                    if (!HasResultForCallId(context, callId))
+                    {
+                        pendingCallIds.Add((callId, fc.Name ?? ""));
+                    }
+                }
+            }
+        }
+
+        if (pendingCallIds.Count == 0) return;
+
+        // Inject recovery result messages for each dangling call
+        var recoveryMsg = new ChatMessage(ChatRole.Tool, "")
+        {
+            Contents = new List<AIContent>()
+        };
+
+        foreach (var (callId, name) in pendingCallIds)
+        {
+            recoveryMsg.Contents.Add(new FunctionResultContent(callId, $"{{ \"error\": \"provider_interrupted\", \"tool\": \"{name}\" }}")
+            {
+                Exception = new OperationCanceledException($"Tool call '{name}' ({callId}) was interrupted by provider")
+            });
+        }
+
+        context.Messages.Add(recoveryMsg);
+    }
+
+    private static bool HasResultForCallId(MessageContext context, string callId)
+    {
+        if (string.IsNullOrEmpty(callId)) return false;
+
+        // Check for direct FunctionResultContent match
+        foreach (var msg in context.Messages)
+        {
+            if (msg.Contents == null) continue;
+            foreach (var content in msg.Contents)
+            {
+                if (content is FunctionResultContent frc && frc.CallId == callId)
+                    return true;
+            }
+        }
+
+        return false;
     }
 }

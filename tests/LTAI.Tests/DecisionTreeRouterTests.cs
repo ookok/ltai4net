@@ -18,7 +18,7 @@ public sealed class DecisionTreeRouterTests
     {
         var router = new DecisionTreeRouter(null, Log);
         var result = await router.RouteAsync("test task",
-            new[] { "LTAI-Chat", "LTAI-Code", "LTAI-Math", "LTAI-Data" });
+            new[] { "LTAI-Chat", "LTAI-Dev", "LTAI-Math", "LTAI-Data" });
         Assert.Equal(BranchKind.NoEmbedder, result.Branch);
         Assert.NotEmpty(result.Candidates);
         Assert.Equal(3, result.Candidates.Count);
@@ -58,9 +58,9 @@ public sealed class DecisionTreeRouterTests
     public async Task RouteAsync_SingleSpecialist_ReturnsIt()
     {
         var router = new DecisionTreeRouter(null, Log, options: new DecisionTreeRouterOptions { TopK = 1 });
-        var result = await router.RouteAsync("task", new[] { "LTAI-Code" });
+        var result = await router.RouteAsync("task", new[] { "LTAI-Dev" });
         Assert.Single(result.Candidates);
-        Assert.Equal("LTAI-Code", result.Candidates[0]);
+        Assert.Equal("LTAI-Dev", result.Candidates[0]);
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public sealed class DecisionTreeRouterTests
     {
         var router = new DecisionTreeRouter(null, Log);
         var result = await router.RouteAsync("task",
-            new[] { "LTAI-Chat", "LTAI-Chat", "LTAI-Code" });
+            new[] { "LTAI-Chat", "LTAI-Chat", "LTAI-Dev" });
         Assert.NotEmpty(result.Candidates);
     }
 

@@ -127,11 +127,8 @@ internal static partial class AgentBuilder
         }
         catch { /* router unavailable — non-critical */ }
 
-        // P0.1: Wrap with progress guard to detect repeated tool calls
-        IChatClient guardedLlm = new LTAI.Agent.Clients.ThinkingTagValidator(
-            new LTAI.Agent.Clients.ProgressGuardChatClient(llm));
-
-        // P0.2: LLM I/O logging (zap-inspired, enabled via LTAI_LLM_LOG=true)
+        // P0.1: LLM I/O logging (zap-inspired, enabled via LTAI_LLM_LOG=true)
+        IChatClient guardedLlm = llm;
         var ltaiOptions = sp.GetService<Microsoft.Extensions.Options.IOptions<LTAIOptions>>()?.Value;
         guardedLlm = new LTAI.Agent.Clients.LlmLoggingChatClient(guardedLlm, ltaiOptions);
 
@@ -139,10 +136,15 @@ internal static partial class AgentBuilder
         // Replaces ToolRetrievalProvider's AIContextProvider approach which had ordering issues with
         // HarnessAgent's built-in providers (FileAccessProvider, BackgroundAgentsProvider).
         var embedder = sp.GetRequiredService<LTAI.AI.EmbeddingClient>();
+        var toolRegistry = sp.GetRequiredService<LTAI.AI.IToolRegistry>();
         var toolEmbeddingCache = sp.GetService<LTAI.AI.ToolEmbeddingCache>();
         var queryEmbeddingCache = sp.GetService<Experts.QueryEmbeddingCache>();
         var l3Client = sp.GetKeyedService<IChatClient>("l3");
-        guardedLlm = new LTAI.Agent.Clients.ToolFilteringChatClient(guardedLlm, embedder, toolEmbeddingCache, queryEmbeddingCache, l3Client);
+        guardedLlm = new LTAI.Agent.Clients.ToolFilteringChatClient(guardedLlm, embedder, toolRegistry, toolEmbeddingCache, queryEmbeddingCache, l3Client);
+
+        // DeerFlow-inspired: SubagentContextIsolation wraps LLM calls to prevent context leakage
+        // between sub-agent and main agent conversations
+        guardedLlm = new LTAI.Agent.Clients.SubagentContextIsolation(guardedLlm);
 
         var tools = new ToolSet();
         var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
@@ -172,6 +174,8 @@ internal static partial class AgentBuilder
         RegisterDelegationTools(tools, name, sp);
         RegisterSessionLineageTools(tools, name, sp);
         RegisterBuildAndPublishTools(tools, name, ws, canExec);
+        RegisterSandboxTools(tools, name, ws, yamlTools, sp);
+        RegisterCommunicationTools(tools, name, httpFactory, yamlTools, sp);
 
         // EIA tools — in optional LTAI.Agent.Eia project (modularized)
 
@@ -246,7 +250,7 @@ internal static partial class AgentBuilder
             .Build();
 
         // ── Plan mode 特殊处理 ──
-        var isPlanMode = name == AgentNames.Plan;
+        var isPlanMode = name == AgentNames.Chat;
         if (isPlanMode)
         {
             tools = new ToolSet();
@@ -273,7 +277,7 @@ internal static partial class AgentBuilder
         // L0: Identity (~100t, always loaded).
         var identityText = ResolveIdentity(opts);
 
-        RegisterMemoryTools(tools, canWrite, palaceStore, ws, yamlTools);
+        RegisterMemoryTools(tools, canWrite, palaceStore, ws, yamlTools, sp);
 
         // MCP (Model Context Protocol) client tools: lazy-loaded on first invocation.
         if (!isPlanMode)
@@ -337,7 +341,7 @@ internal static partial class AgentBuilder
                 // Tool RAG: 动态工具召回（放第一个）→ L1 Skill Evolution Ranking
                  // P12.2: inject ToolEmbeddingCache so 80+ tool description embeddings are
                 // batched + persisted. Cold start 0 ONNX calls after first run.
-                AIContextProviders = AgentContextProviderBuilder.Build(sp, loggerFactory, name, identityText,
+                AIContextProviders = sp.GetRequiredService<AgentContextProviderBuilder>().Build(name, identityText,
                     compaction, kbGraph, codeGraph, codeChunkIndex, wasmtimeSandbox,
                     embedder, palaceStore, identityText, modelId, skillsProvider, safety),
 

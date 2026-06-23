@@ -12,6 +12,7 @@ public sealed class ProviderClientManager
 {
     private readonly ConcurrentDictionary<string, IChatClient> _clients = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _degradation = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _edgeClients = new(StringComparer.OrdinalIgnoreCase);
     private string _defaultProvider = "";
     private readonly string _routingFallback = "l1";
     private readonly ModelMetadataProvider? _modelMetadata;
@@ -39,6 +40,12 @@ public sealed class ProviderClientManager
     /// <summary>Names of all currently registered LLM clients.</summary>
     public IEnumerable<string> RegisteredProviders => _clients.Keys;
 
+    /// <summary>Names of edge (local) registered clients.</summary>
+    public IEnumerable<string> EdgeProviders => _edgeClients;
+
+    /// <summary>Names of remote (API-key-based) registered clients.</summary>
+    public IEnumerable<string> RemoteProviders => _clients.Keys.Where(k => !_edgeClients.Contains(k));
+
     public string? ActiveProvider
     {
         get => _defaultProvider == "" ? null : _defaultProvider;
@@ -52,6 +59,18 @@ public sealed class ProviderClientManager
         _breaker.ClearProvider(name);
     }
 
+    /// <summary>Register an edge (local inference) client. Edge providers are tried first in routing.</summary>
+    public void RegisterEdge(string name, IChatClient client)
+    {
+        _clients[name] = client;
+        _edgeClients.Add(name);
+        _breaker.ClearProvider(name);
+    }
+
+    public bool HasDegradation(string name) => _degradation.ContainsKey(name);
+
+    public void SetDegradation(string from, string to) => _degradation[from] = to;
+
     public IChatClient? GetClient(string name) =>
         _clients.TryGetValue(name, out var c) ? c : null;
 
@@ -61,13 +80,16 @@ public sealed class ProviderClientManager
     public IChatClient GetL2Client() =>
         _clients.TryGetValue("l2", out var c) ? c : _clients["l1"];
 
+    /// <summary>Ranked providers with edge-first priority.</summary>
     public IEnumerable<string> RankedProviders(string preferred)
     {
         var now = DateTime.UtcNow;
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var candidates = new List<(string Id, double Health)>();
+        var edgeCandidates = new List<(string Id, double Health)>();
+        var remoteCandidates = new List<(string Id, double Health)>();
         var current = preferred;
 
+        // Collect candidates along the degradation chain
         while (current != null && seen.Add(current))
         {
             if (_breaker.IsInCooldown(current))
@@ -78,14 +100,23 @@ public sealed class ProviderClientManager
             }
 
             if (_clients.ContainsKey(current))
-                candidates.Add((current, _breaker.CalcHealthScore(current)));
+            {
+                var entry = (current, _breaker.CalcHealthScore(current));
+                if (_edgeClients.Contains(current))
+                    edgeCandidates.Add(entry);
+                else
+                    remoteCandidates.Add(entry);
+            }
 
             current = _degradation.TryGetValue(current, out var next2) ? next2 : null;
         }
 
-        candidates.Sort((a, b) => b.Health.CompareTo(a.Health));
-        foreach (var c in candidates)
-            yield return c.Id;
+        // Sort edge candidates first, then remote — both by health score descending
+        edgeCandidates.Sort((a, b) => b.Health.CompareTo(a.Health));
+        remoteCandidates.Sort((a, b) => b.Health.CompareTo(a.Health));
+
+        foreach (var e in edgeCandidates) yield return e.Id;
+        foreach (var r in remoteCandidates) yield return r.Id;
 
         // Degradation chain exhausted — wide fallback via ModelMetadataProvider
         if (_modelMetadata != null)

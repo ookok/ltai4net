@@ -21,52 +21,17 @@ namespace LTAI.Agent.Tools;
 [ToolDomain("shell")]
 public sealed class SafeShellTool
 {
-    /// <summary>Commands with POSIX-specific semantics on Windows.
-    /// Returns a warning + suggested alternative, but lets the command proceed (may fail).</summary>
-    internal static Dictionary<string, string> PlatformUnsupportedWarnings = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["chmod"] = "Windows 使用 ACL 而非 POSIX 权限位。考虑使用 icacls。",
-        ["chown"] = "Windows 使用 ACL 而非 POSIX 权限位。考虑使用 icacls。",
-        ["chgrp"] = "Windows 使用 ACL 而非 POSIX 权限位。考虑使用 icacls。",
-        ["chroot"] = "Windows 无 chroot 等效机制。",
-        ["mkfifo"] = "Windows 不支持命名管道设备节点。",
-        ["mknod"] = "Windows 不支持设备节点。",
-        ["kill"] = "Windows 无 POSIX 信号机制。使用 taskkill /F /PID <id>。",
-        ["nohup"] = "Windows 无 nohup 等效。",
-        ["nice"] = "Windows 无进程优先级命令。",
-        ["ln"] = "Windows 无符号链接。考虑 mklink。",
-        ["id"] = "Windows 使用不同的用户管理 API。尝试 whoami。",
-        ["groups"] = "Windows 使用不同的用户管理 API。",
-        ["who"] = "Windows 使用不同的用户管理 API。",
-        ["logname"] = "Windows 使用不同的用户管理 API。",
-        ["sync"] = "Windows 自动同步文件系统缓存。",
-        ["shred"] = "Windows 无安全删除命令。",
-        ["stty"] = "Windows 无终端设置命令。",
-        ["tty"] = "Windows 无终端名称命令。",
-    };
+    /// <summary>Commands with POSIX-specific semantics on Windows.</summary>
+    internal static Dictionary<string, string> PlatformUnsupportedWarnings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>PowerShell alias conflicts: prefix with .exe to force coreutils binary.</summary>
-    internal static Dictionary<string, string> PowerShellAliasConflicts = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["ls"] = "ls.exe", ["cat"] = "cat.exe", ["cp"] = "cp.exe",
-        ["mv"] = "mv.exe", ["rm"] = "rm.exe", ["pwd"] = "pwd.exe",
-        ["sort"] = "sort.exe", ["tee"] = "tee.exe", ["uptime"] = "uptime.exe",
-        ["mkdir"] = "mkdir.exe", ["rmdir"] = "rmdir.exe", ["sleep"] = "sleep.exe",
-    };
+    /// <summary>PowerShell alias conflicts.</summary>
+    internal static Dictionary<string, string> PowerShellAliasConflicts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Apply user config overlays from appsettings.json.</summary>
+    /// <summary>Apply user config from appsettings.json (authoritative).</summary>
     internal static void ApplyConfig(LTAI.Core.Configuration.ShellSecurityConfig config)
     {
-        if (config.PlatformUnsupportedWarnings.Count > 0)
-        {
-            foreach (var (k, v) in config.PlatformUnsupportedWarnings)
-                PlatformUnsupportedWarnings[k] = v;
-        }
-        if (config.PowerShellAliasConflicts.Count > 0)
-        {
-            foreach (var (k, v) in config.PowerShellAliasConflicts)
-                PowerShellAliasConflicts[k] = v;
-        }
+        PlatformUnsupportedWarnings = new Dictionary<string, string>(config.PlatformUnsupportedWarnings, StringComparer.OrdinalIgnoreCase);
+        PowerShellAliasConflicts = new Dictionary<string, string>(config.PowerShellAliasConflicts, StringComparer.OrdinalIgnoreCase);
         if (!string.IsNullOrEmpty(config.SystemPathFallback))
             SystemPathFallback = config.SystemPathFallback;
     }

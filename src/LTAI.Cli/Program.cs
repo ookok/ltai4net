@@ -25,6 +25,7 @@ partial class Program
         var command = args[0].ToLowerInvariant();
         return command switch
         {
+            "init" or "setup" => await HandleInit().ConfigureAwait(false),
             "env" => HandleEnv(args[1..]),
             "migrate" => await HandleMigrate(args[1..]).ConfigureAwait(false),
             "textpad" => HandleTextPad(args[1..]),
@@ -50,6 +51,7 @@ partial class Program
 
         void Add(string cmd, string desc) => table.AddRow(cmd.EscapeMarkup(), desc.EscapeMarkup());
 
+        Add("init (setup)", "Interactive setup wizard");
         Add("env", "Show / export / import environment variables");
         Add("env get|set <name> <value>", "Get or set a single environment variable");
         Add("migrate", "Check LiteDB → SQLite migration status");

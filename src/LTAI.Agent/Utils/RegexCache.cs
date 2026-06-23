@@ -1,3 +1,4 @@
+using LTAI.Core.Configuration;
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 
@@ -15,8 +16,7 @@ public static class RegexCache
     private static readonly ConcurrentQueue<string> _order = new();
     private const int MaxCapacity = 512;
 
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMilliseconds(
-        int.TryParse(Environment.GetEnvironmentVariable("LTAI_REGEX_TIMEOUT_MS"), out var rt) ? Math.Max(100, rt) : 1000);
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMilliseconds(EnvironmentConfig.RegexTimeoutMs);
 
     /// <summary>Get or create a compiled regex. Cache key = pattern + options.</summary>
     public static Regex GetOrAdd(string pattern, RegexOptions options, TimeSpan? timeout = null)

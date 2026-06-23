@@ -32,6 +32,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
+      - name: Cache MAF prebuilt DLLs
+        id: cache-maf
+        uses: actions/cache@v4
+        with:
+          path: dist/lib/maf
+          key: ${{ runner.os }}-maf-${{ hashFiles('extern/agent-framework/dotnet/**/*.cs', 'scripts/build-maf.ps1') }}
+
+      - name: Build MAF DLLs (if cache miss)
+        if: steps.cache-maf.outputs.cache-hit != 'true'
+        run: pwsh -File scripts/build-maf.ps1 -NoRestore
+
       - name: Restore
         run: dotnet restore
 

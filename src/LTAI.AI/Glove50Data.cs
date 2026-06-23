@@ -28,7 +28,7 @@ public static class Glove50Data
     /// </summary>
     public static readonly string[] MirrorUrls =
     [
-        "https://mogoo.com.cn/glove/glove50d.gv50",
+        "https://github.com/opencode-ai/glove50d/releases/download/v1.0/glove50d.gv50",
         "https://hf-mirror.com/ltai/glove50d/resolve/main/glove50d.gv50",
     ];
 
@@ -39,7 +39,7 @@ public static class Glove50Data
     public static readonly string[] SourceUrls =
     [
         "https://huggingface.co/stanfordnlp/glove/resolve/main/glove.6B.50d.txt",
-        "https://mogoo.com.cn/glove/glove.6B.50d.txt",
+        "https://github.com/opencode-ai/glove50d/releases/download/v1.0/glove.6B.50d.txt",
     ];
 
     /// <summary>

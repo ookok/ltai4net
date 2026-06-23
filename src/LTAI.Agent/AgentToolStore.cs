@@ -119,6 +119,79 @@ public sealed class AgentToolStore
     private static readonly HashSet<string> AllowedScriptExts = new(StringComparer.OrdinalIgnoreCase)
         { ".ps1", ".cmd", ".bat", ".sh" };
 
+    private const int MaxScriptSizeBytes = 1_000_000;
+    private const int ContentScanBytes = 4096;
+
+    /// <summary>
+    /// Scans script content for dangerous patterns using <see cref="ShellSecurity.DangerousPatterns"/>.
+    /// Returns an error message if dangerous content is detected, or null if safe.
+    /// </summary>
+    private static string? ScanScriptContent(string scriptPath)
+    {
+        try
+        {
+            var fi = new FileInfo(scriptPath);
+            if (fi.Length > MaxScriptSizeBytes)
+                return $"script exceeds {MaxScriptSizeBytes / 1024}KB size limit";
+            if (fi.Length == 0)
+                return "script is empty";
+
+            using var stream = fi.OpenRead();
+            var buffer = new byte[ContentScanBytes];
+            var bytesRead = stream.Read(buffer, 0, ContentScanBytes);
+            stream.Close();
+
+            // Reject binary content: null byte in first 512 bytes
+            var scanLen = Math.Min(bytesRead, 512);
+            for (int i = 0; i < scanLen; i++)
+            {
+                if (buffer[i] == 0)
+                    return "script contains binary content (null byte detected)";
+            }
+
+            // Convert to text for pattern matching (first ContentScanBytes)
+            var text = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead);
+            var textLower = text.ToLowerInvariant();
+
+            foreach (var pattern in ShellSecurity.DangerousPatterns)
+            {
+                if (textLower.Contains(pattern.ToLowerInvariant()))
+                    return $"script contains dangerous pattern: '{pattern}'";
+            }
+
+            // Check for code execution patterns (downloading + executing)
+            foreach (var downloadPattern in new[] { "invoke-webrequest", "wget", "curl", "certutil", "bitsadmin" })
+            {
+                if (textLower.Contains(downloadPattern))
+                {
+                    // Only block if combined with execution indicators
+                    if (textLower.Contains("-exec") || textLower.Contains("|") || textLower.Contains("iex"))
+                        return $"script contains download + execute pattern: '{downloadPattern}'";
+                }
+            }
+
+            // Check for dangerous PowerShell script blocks
+            var dangerKeywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "invoke-expression", "iex ", "invoke-command", "invoke-wmimethod",
+                "start-process -windowstyle hidden", "bypass -enc", "-enc ",
+                "frombase64string", "byte[]", "memorystream",
+                "add-type", "unsafeinterop", "dllimport",
+            };
+            foreach (var keyword in dangerKeywords)
+            {
+                if (textLower.Contains(keyword))
+                    return $"script blocked: contains '{keyword}'";
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"cannot scan script content: {ex.Message}";
+        }
+    }
+
     public void HotReloadAgentTools(string agentName)
     {
         var livingTreeRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".livingtree"));
@@ -150,6 +223,11 @@ public sealed class AgentToolStore
                     if (ShellSecurity.IsBlocked(scriptFull))
                         continue;
 
+                    // Content security scan
+                    var scanError = ScanScriptContent(scriptFull);
+                    if (scanError != null)
+                        continue;
+
                     Func<string> executeScript = () =>
                     {
                         try
@@ -162,6 +240,8 @@ public sealed class AgentToolStore
                                 RedirectStandardOutput = true,
                                 RedirectStandardError = true,
                             };
+                            ShellSecurity.RestrictEnvironment(startInfo,
+                                OperatingSystem.IsWindows(), "");
                             using var proc = new Process { StartInfo = startInfo };
                             proc.Start();
                             var outText = proc.StandardOutput.ReadToEnd();
@@ -171,7 +251,7 @@ public sealed class AgentToolStore
                         }
                         catch (Exception ex)
                         {
-                            return $"❌ 脚本执行失败: {ex.Message}";
+                            return $"脚本执行失败: {ex.Message}";
                         }
                     };
                     var tool = AIFunctionFactory.Create(

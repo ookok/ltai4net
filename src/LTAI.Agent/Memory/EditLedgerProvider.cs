@@ -25,7 +25,7 @@ public sealed class EditLedgerProvider : AIContextProvider
 
     public EditLedgerProvider(EditLedger ledger, int maxTokens = 200)
     {
-        _ledger = ledger ?? EditLedger.Default;
+        _ledger = ledger;
         _maxTokens = maxTokens;
     }
 

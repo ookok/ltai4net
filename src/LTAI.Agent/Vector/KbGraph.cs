@@ -15,6 +15,7 @@ using LTAI.Agent.Context;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Formats;
 using LTAI.Agent.Utils;
+using LTAI.Core.Caching;
 using LTAI.Core.Vector;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -37,6 +38,11 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
     private readonly Reranker? _reranker;
     private readonly EmbeddingClient? _embedder;
     private readonly ILogger<KbGraph> _logger;
+    private readonly LTAICache<string, string> _expansionCache = new(new LTAICacheOptions
+    {
+        MaxEntries = 1000,
+        DefaultTtl = TimeSpan.FromMinutes(5)
+    });
 
     /// <summary>RRF fusion constant (default 60, inspired by sqlite-graphrag's configurable --rrf-k).</summary>
     public int RrfK { get; set; } = 60;
@@ -161,6 +167,155 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
 
         // Stage 4: Rich mixed context output (ms graphrag LocalSearchMixedContext inspired)
         return await BuildMixedContextAsync(resultIds, topK, ct, format).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Query the knowledge graph with discourse-aware rhetorical structure.
+    /// Returns a compact rhetorical graph annotation: for each pair of retrieved
+    /// chunks, classifies the rhetorical relation (elaborates, contrasts_with,
+    /// causes_effect, supports_claim, provides_background) using LLM analysis.
+    /// Output format is a Markdown discourse map suitable for prompt injection.
+    /// </summary>
+    /// <param name="query">User query.</param>
+    /// <param name="topK">Number of top chunks to analyze.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>List of rhetorical relation annotations.</returns>
+    public async Task<List<string>> QueryRhetoricalGraphAsync(string query, int topK = 10, CancellationToken ct = default)
+    {
+        // Get base KG results first
+        var results = await QueryAsync(query, topK, expandGraph: true, ct: ct, format: ResultFormat.Markdown)
+            .ConfigureAwait(false);
+
+        if (results.Count == 0)
+            return ["（无语义上下文可分析）"];
+
+        // Use LLM rewriter as discourse classifier if available
+        if (_rewriter == null)
+        {
+            // Fallback: simple heuristic edge detection from existing graph
+            return await BuildHeuristicRhetoricalEdgesAsync(results, ct).ConfigureAwait(false);
+        }
+
+        return await BuildLlmRhetoricalGraphAsync(query, results, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Build rhetorical graph using existing KG edge types as heuristic.</summary>
+    private async Task<List<string>> BuildHeuristicRhetoricalEdgesAsync(List<string> contexts, CancellationToken ct)
+    {
+        var edges = new List<string>();
+
+        foreach (var ctx in contexts)
+        {
+            // Extract node IDs from context (assumes markdown has backlinks)
+            // Simple heuristic: match "causes", "supports", "contradicts" patterns
+            if (ctx.Contains("causes", StringComparison.OrdinalIgnoreCase))
+                edges.Add($"- 因果: {ctx[..Math.Min(ctx.Length, 100)]}...");
+            if (ctx.Contains("contradicts", StringComparison.OrdinalIgnoreCase))
+                edges.Add($"- 矛盾: {ctx[..Math.Min(ctx.Length, 100)]}...");
+            if (ctx.Contains("supports", StringComparison.OrdinalIgnoreCase))
+                edges.Add($"- 支持: {ctx[..Math.Min(ctx.Length, 100)]}...");
+        }
+
+        if (edges.Count == 0)
+            edges.Add("（未检测到显式修辞关系）");
+
+        return edges;
+    }
+
+    /// <summary>Use LLM to build a rhetorical graph from retrieved chunks.</summary>
+    private async Task<List<string>> BuildLlmRhetoricalGraphAsync(string query, List<string> contexts, CancellationToken ct)
+    {
+        var truncated = string.Join("\n---\n",
+            contexts.Select((c, i) => $"[{i}] {c[..Math.Min(c.Length, 300)]}..."));
+
+        var prompt = $@"Given the query: ""{query}""
+
+Analyze the following retrieved context chunks and identify rhetorical relationships BETWEEN them.
+Focus on how chunks relate to each other (not to the query).
+
+For each pair that has a meaningful rhetorical connection, output a line:
+- ""[i] --[relation]--> [j]"": brief explanation
+
+Valid relations: elaborates, contrasts_with, causes_effect, supports_claim, provides_background
+
+Context chunks:
+{truncated}
+
+Output only the relationship lines, one per pair. If no clear relationship exists, output ""(none)"".";
+
+        var response = await _rewriter
+            .GetResponseAsync([new ChatMessage(ChatRole.User, prompt)], cancellationToken: ct)
+            .ConfigureAwait(false);
+        var text = response?.Text;
+        if (string.IsNullOrWhiteSpace(text))
+            return ["（LLM 修辞分析无返回）"];
+
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0 && !l.StartsWith("(") && !l.StartsWith("```"))
+            .ToList();
+
+        if (lines.Count == 0)
+            lines.Add("（未检测到显著修辞关系）");
+
+        // Store rhetorical edges in the knowledge graph for future queries
+        // Parse lines like: [0] --[elaborates]--> [1]
+        foreach (var line in lines)
+        {
+            try
+            {
+                var parts = line.Split(["--[", "]-->", "==>"], StringSplitOptions.None);
+                if (parts.Length >= 3)
+                {
+                    var srcIdx = parts[0].Trim().TrimStart('[').TrimEnd(']');
+                    var rel = parts[1].Trim();
+                    var dstPart = parts[2].Trim().TrimStart('[').TrimEnd(']');
+                    var dstIdx = dstPart.Split(' ').FirstOrDefault() ?? dstPart;
+                    // Store edges asynchronously (best-effort)
+                    if (int.TryParse(srcIdx, out var si) && int.TryParse(dstIdx, out var di)
+                        && si >= 0 && si < contexts.Count && di >= 0 && di < contexts.Count)
+                    {
+                        _ = StoreRhetoricalEdgeAsync(si, di, rel, contexts);
+                    }
+                }
+            }
+            catch
+            {
+                // Skip malformed lines
+            }
+        }
+
+        return lines;
+    }
+
+    /// <summary>Best-effort storage of rhetorical edges in KG for future queries.</summary>
+    private async Task StoreRhetoricalEdgeAsync(int srcIdx, int dstIdx, string relation, List<string> contexts)
+    {
+        var rel = relation.ToLowerInvariant() switch
+        {
+            "elaborates" => "elaborates",
+            "contrasts_with" or "contrasts" => "contrasts_with",
+            "causes_effect" or "causes" => "causes_effect",
+            "supports_claim" or "supports" => "supports_claim",
+            "provides_background" or "background" => "provides_background",
+            _ => "references",
+        };
+        try
+        {
+
+            // Create nodes for each chunk if they don't exist, then add edge
+            var srcExtId = $"discourse:chunk_{srcIdx}";
+            var dstExtId = $"discourse:chunk_{dstIdx}";
+
+            var srcId = await _store.UpsertNode(srcExtId, "chunk", $"chunk_{srcIdx}").ConfigureAwait(false);
+            var dstId = await _store.UpsertNode(dstExtId, "chunk", $"chunk_{dstIdx}").ConfigureAwait(false);
+
+            await _store.AddEdge(srcId, dstId, rel, weight: 1.0).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "StoreRhetoricalEdgeAsync: failed to store {Rel} edge ({Src}→{Dst})", rel, srcIdx, dstIdx);
+        }
     }
 
     /// <summary>
@@ -707,45 +862,37 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
     /// </summary>
     private static bool IsSimpleQuery(string query) => QueryUtils.IsSimpleQuery(query);
 
-    // Query expansion cache (TTL: 5 minutes)
-    private static readonly ConcurrentDictionary<string, (string Expanded, DateTime CachedAt)> _expansionCache = new();
-    private static readonly TimeSpan ExpansionCacheTtl = TimeSpan.FromMinutes(5);
-    private const int ExpansionCacheMaxSize = 1000;
-
     private async Task<string> ExpandQueryAsync(string query, CancellationToken ct)
     {
-        // L0 short-circuit: simple queries don't trigger LLM
         if (_rewriter == null || IsSimpleQuery(query)) return query;
 
-        // Check cache first
         var cacheKey = query.Trim().ToLowerInvariant();
-        if (_expansionCache.TryGetValue(cacheKey, out var cached) &&
-            (DateTime.UtcNow - cached.CachedAt) < ExpansionCacheTtl)
+        if (_expansionCache.TryGet(cacheKey, out var cached))
         {
             _logger.LogDebug("KbGraph: query expansion cache hit for \"{Q}\"", query);
-            return cached.Expanded;
+            return cached;
         }
 
         try
         {
             var prompt = $"""
                 You are a search query expander. Given a query, produce expanded search terms.
-                
+
                 Rules:
                 - Group 1: Core keywords from the original query (3-5 terms)
                 - Group 2: Synonyms and related technical terms (2-4 terms)
                 - Group 3: If the query is Chinese, add English equivalents (1-3 terms)
-                
+
                 Return ALL terms on a single line, space-separated.
                 No explanations, no numbering.
-                
+
                 Examples:
                 Query: 用户登录失败
                 → login failure authentication UserService error 认证 失败 用户登录
-                
+
                 Query: 内存泄漏怎么排查
                 → memory leak排查 GC dump heap allocation 内存 泄漏
-                
+
                 Query: {query}
                 """;
             var resp = await _rewriter.GetResponseAsync(
@@ -753,32 +900,7 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
             var result = resp.Text?.Trim() ?? "";
             var expanded = string.IsNullOrWhiteSpace(result) ? query : result;
 
-            // Cache the result
-            _expansionCache[cacheKey] = (expanded, DateTime.UtcNow);
-
-            // Evict old entries periodically
-            if (_expansionCache.Count >= ExpansionCacheMaxSize)
-            {
-                var now = DateTime.UtcNow;
-                foreach (var key in _expansionCache.Keys.ToList())
-                {
-                    if (_expansionCache.TryGetValue(key, out var entry) &&
-                        (now - entry.CachedAt) > ExpansionCacheTtl)
-                    {
-                        _expansionCache.TryRemove(key, out _);
-                    }
-                }
-                // Hard limit: if still too large, remove oldest entry
-                while (_expansionCache.Count >= ExpansionCacheMaxSize)
-                {
-                    var oldest = _expansionCache.MinBy(kv => kv.Value.CachedAt);
-                    if (oldest.Key != null)
-                        _expansionCache.TryRemove(oldest.Key, out _);
-                    else
-                        break;
-                }
-            }
-
+            _expansionCache.Set(cacheKey, expanded);
             return expanded;
         }
         catch (Exception ex)

@@ -36,8 +36,15 @@ public sealed class EditLedger
     private readonly ConcurrentDictionary<string, FileEntry> _files = new(StringComparer.OrdinalIgnoreCase);
     private int _turnCounter;
 
-    /// <summary>Get the singleton instance.</summary>
-    public static EditLedger Default { get; } = new();
+    private static volatile EditLedger? _default;
+
+    /// <summary>Get the default singleton instance. Must be initialized before use.</summary>
+    public static EditLedger Default => _default ?? throw new InvalidOperationException(
+        "EditLedger not initialized. Register in DI via services.AddSingleton<EditLedger>() " +
+        "or call EditLedger.SetDefault(instance) during startup.");
+
+    /// <summary>Set the default singleton instance (called from DI registration).</summary>
+    public static void SetDefault(EditLedger instance) => _default = instance;
 
     /// <summary>
     /// Record a file edit. Called by file write/edit tools.

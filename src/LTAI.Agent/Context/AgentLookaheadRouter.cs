@@ -23,24 +23,23 @@ public sealed class AgentLookaheadRouter
 {
     private readonly Glove50Embedder? _glove;
 
-    // Domain → preferred agent name mapping
     private static readonly Dictionary<string, string[]> DomainAgents = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["code"] = ["LTAI-Code", "LTAI-Review", "LTAI-Debug"],
-        ["knowledge"] = ["LTAI-Arch", "LTAI-Chat-Pro"],
+        ["code"] = ["LTAI-Dev", "LTAI-QA"],
+        ["knowledge"] = ["LTAI-Arch", "LTAI-Chat"],
         ["memory"] = ["LTAI-Chat"],
         ["diary"] = ["LTAI-Chat"],
-        ["system"] = ["LTAI-System", "LTAI-DevOps"],
+        ["system"] = ["LTAI-System", "LTAI-Ops"],
         ["document"] = ["LTAI-Office"],
-        ["test"] = ["LTAI-Test"],
-        ["security"] = ["LTAI-Security"],
-        ["database"] = ["LTAI-Data", "LTAI-SQL"],
+        ["test"] = ["LTAI-QA"],
+        ["security"] = ["LTAI-Ops"],
+        ["database"] = ["LTAI-Data"],
         ["general"] = ["LTAI-Chat"],
         ["math"] = ["LTAI-Math"],
         ["writing"] = ["LTAI-Writer"],
-        ["api"] = ["LTAI-API"],
-        ["frontend"] = ["LTAI-Frontend"],
-        ["llm"] = ["LTAI-LLM"],
+        ["api"] = ["LTAI-Dev"],
+        ["frontend"] = ["LTAI-Dev"],
+        ["llm"] = ["LTAI-Dev"],
     };
 
     public AgentLookaheadRouter(Glove50Embedder? glove = null)
@@ -100,11 +99,8 @@ public sealed class AgentLookaheadRouter
         if (ContainsAny(lower, ["math", "calculate", "equation", "formula", "数学", "计算"]))
             result.Add("math");
 
-        if (ContainsAny(lower, ["frontend", "css", "html", "react", "vue", "angular", "ui", "前端"]))
-            result.Add("frontend");
-
-        if (ContainsAny(lower, ["llm", "model", "prompt", "token", "embedding", "gpt", "transformer"]))
-            result.Add("llm");
+        if (ContainsAny(lower, ["frontend", "css", "html", "react", "vue", "angular", "ui", "前端", "llm", "model", "prompt", "token", "embedding", "gpt", "transformer"]))
+            result.Add("code");
 
         if (ContainsAny(lower, ["write", "draft", "article", "blog", "文档编写", "写作"]))
             result.Add("writing");

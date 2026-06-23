@@ -20,7 +20,7 @@ public sealed class ApiKeyMiddleware
     {
         _next = next;
         _config = config;
-        _configuredKey = Environment.GetEnvironmentVariable("LTAI_API_KEY")
+        _configuredKey = LTAI.Core.Configuration.EnvironmentConfig.WebApiKey
                       ?? config?["LTAI:ApiKey"];
         _configuredKeyBytes = _configuredKey != null
             ? Encoding.UTF8.GetBytes(_configuredKey)
@@ -41,8 +41,7 @@ public sealed class ApiKeyMiddleware
         // No key configured → require explicit dev-mode opt-in
         if (string.IsNullOrEmpty(_configuredKey))
         {
-            var allowDev = string.Equals(
-                Environment.GetEnvironmentVariable("LTAI_DEV_MODE"), "true", StringComparison.OrdinalIgnoreCase)
+            var allowDev = LTAI.Core.Configuration.EnvironmentConfig.DevMode
                 || string.Equals(_config?["LTAI:DevMode"], "true", StringComparison.OrdinalIgnoreCase);
             if (!allowDev)
             {

@@ -1,3 +1,4 @@
+using LTAI.Core.Configuration;
 using System.Collections.Concurrent;
 
 namespace LTAI.Web.Middleware;
@@ -14,15 +15,14 @@ public sealed class RateLimitMiddleware
     private readonly int _maxRequests;
     private readonly int _windowSec;
     private readonly ConcurrentDictionary<string, WindowState> _windows = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(
-        int.TryParse(Environment.GetEnvironmentVariable("LTAI_RATE_LIMIT_CLEANUP_MIN"), out var m) ? Math.Max(1, m) : 5);
+    private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(EnvironmentConfig.RateLimitCleanupMin);
     private DateTime _lastCleanup = DateTime.UtcNow;
 
     public RateLimitMiddleware(RequestDelegate next)
     {
         _next = next;
-        _maxRequests = int.TryParse(Environment.GetEnvironmentVariable("LTAI_RATE_LIMIT_REQUESTS"), out var r) ? r : 60;
-        _windowSec = int.TryParse(Environment.GetEnvironmentVariable("LTAI_RATE_LIMIT_WINDOW_SEC"), out var w) ? w : 60;
+        _maxRequests = EnvironmentConfig.RateLimitRequests;
+        _windowSec = EnvironmentConfig.RateLimitWindowSec;
     }
 
     public async Task InvokeAsync(HttpContext context)

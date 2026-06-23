@@ -1,3 +1,4 @@
+using LTAI.Core.Configuration;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
@@ -57,7 +58,7 @@ public sealed class ProxyService : IDisposable
     }
 
     private static readonly SemaphoreSlim s_handlerSemaphore = new(
-        Math.Max(1, int.TryParse(Environment.GetEnvironmentVariable("LTAI_PROXY_MAX_CONN"), out var m) ? m : 100));
+        Math.Max(1, EnvironmentConfig.ProxyMaxConn));
 
     private async Task AcceptLoopAsync(CancellationToken ct)
     {

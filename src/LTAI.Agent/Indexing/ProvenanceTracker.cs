@@ -1,10 +1,13 @@
 using System.Collections.Concurrent;
+using LTAI.Agent.Delta;
 
 namespace LTAI.Agent.Indexing;
 
 public sealed class ProvenanceTracker
 {
     private readonly ConcurrentDictionary<string, ProvenanceEntry> _store = new();
+
+    public DeltaStore? DeltaStore { get; set; }
 
     public void Track(string key, string source, string operation)
     {
@@ -15,6 +18,22 @@ public sealed class ProvenanceTracker
             Operation = operation,
             Timestamp = DateTime.UtcNow
         };
+    }
+
+    public async Task TrackDeltaAsync(string filePath, int startLine, int endLine,
+        string toolName, string conversationId, string messageId,
+        string? agentId = null, bool isNewFile = false)
+    {
+        Track(filePath, toolName, $"L{startLine}-L{endLine}");
+
+        if (DeltaStore != null)
+        {
+            await DeltaStore.CreateDeltaForEditAsync(
+                filePath, startLine, endLine,
+                diffContent: null, toolName,
+                conversationId, messageId,
+                agentId, isNewFile).ConfigureAwait(false);
+        }
     }
 
     public ProvenanceEntry? Get(string key)

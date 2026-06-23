@@ -193,6 +193,14 @@ public class KgStoreEdgeCaseTests : IDisposable
 
 public class SafeShellToolTests
 {
+    static SafeShellToolTests()
+    {
+        ShellSecurity.ApplyConfig(new ShellSecurityConfig
+        {
+            BlockedExes = ["sudo"],
+            DangerousPatterns = ["rm -rf /"],
+        });
+    }
     [Fact]
     public async Task RunCommand_Dangerous_ReturnsError()
     {

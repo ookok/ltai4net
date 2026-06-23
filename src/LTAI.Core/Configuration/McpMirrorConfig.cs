@@ -15,10 +15,10 @@ public sealed class McpServerConfig
 
 public sealed class MirrorConfig
 {
-    public string WarpMsiUrl { get; init; } = "http://mogoo.com.cn/Cloudflare_WARP_2026.4.1390.0.msi";
-    public string WindowsTerminalUrl { get; init; } = "http://mogoo.com.cn/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
-    public string RipGrepUrl { get; init; } = "http://mogoo.com.cn/rg.exe";
-    public string ModelBaseUrl { get; init; } = "http://mogoo.com.cn/";
+    public string WarpMsiUrl { get; init; } = "https://github.com/cloudflare/cloudflare-warp/releases/download/2026.4.1390.0/Cloudflare_WARP_2026.4.1390.0.msi";
+    public string WindowsTerminalUrl { get; init; } = "https://github.com/microsoft/terminal/releases/download/v1.24.11321.0/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
+    public string RipGrepUrl { get; init; } = "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/rg.exe";
+    public string ModelBaseUrl { get; init; } = "https://hf-mirror.com/";
 }
 
 public sealed class DurableConfig

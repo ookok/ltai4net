@@ -3,6 +3,7 @@ using LTAI.Agent.Context;
 using LTAI.Agent.Memory;
 using LTAI.Agent.Tools;
 using LTAI.Core.Configuration;
+using LTAI.Core.Memory;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -47,6 +48,15 @@ public static partial class ServiceCollectionExtensions
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<PalaceStore>();
             return PalaceStore.CreateShared(embedder, opts.ResolveDataPath("kg.db"), logger);
+        });
+
+        // Unified 3-layer memory store (wraps PalaceStore)
+        services.AddSingleton<IMemoryStore>(sp =>
+        {
+            var palace = sp.GetRequiredService<PalaceStore>();
+            var embedder = sp.GetRequiredService<LTAI.AI.EmbeddingClient>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<MemoryStore>();
+            return new MemoryStore(palace, embedder, logger);
         });
 
         services.AddHostedService<MemoryConsolidationService>(sp =>

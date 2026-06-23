@@ -1,3 +1,4 @@
+using LTAI.Core.Storage;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -20,11 +21,13 @@ public sealed class LivingtreeHealthCheck : BackgroundService
     private readonly ILogger<LivingtreeHealthCheck> _logger;
     private readonly string _livingtreeDir;
     private readonly string _auditDir;
-    private static readonly string[] DbFiles = ["kg.db", "circuit_breaker.db"];
+    private readonly UnifiedDbManager _dbManager;
 
-    public LivingtreeHealthCheck(ILogger<LivingtreeHealthCheck>? logger = null)
+    public LivingtreeHealthCheck(ILogger<LivingtreeHealthCheck>? logger = null,
+        UnifiedDbManager? dbManager = null)
     {
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<LivingtreeHealthCheck>.Instance;
+        _dbManager = dbManager!;
         _livingtreeDir = Path.Combine(AppContext.BaseDirectory, ".livingtree");
         _auditDir = Path.Combine(_livingtreeDir, "audit");
     }
@@ -107,10 +110,10 @@ public sealed class LivingtreeHealthCheck : BackgroundService
             }
         }
 
-        // 3. Vacuum large SQLite databases
-        foreach (var dbFile in DbFiles)
+        // 3. Vacuum large SQLite databases (uses UnifiedDbManager registry)
+        var allDbPaths = _dbManager?.GetAllPaths() ?? DbFilesFallback();
+        foreach (var dbPath in allDbPaths)
         {
-            var dbPath = Path.Combine(_livingtreeDir, dbFile);
             if (!File.Exists(dbPath)) continue;
 
             try
@@ -125,12 +128,12 @@ public sealed class LivingtreeHealthCheck : BackgroundService
                     result.VacuumedDatabases++;
                     result.FreedBytes += (beforeBytes - afterBytes);
                     _logger.LogInformation("Vacuumed {Db}: {BeforeMB:F2} MB → {AfterMB:F2} MB",
-                        dbFile, beforeBytes / (1024.0 * 1024.0), afterBytes / (1024.0 * 1024.0));
+                        Path.GetFileName(dbPath), beforeBytes / (1024.0 * 1024.0), afterBytes / (1024.0 * 1024.0));
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to vacuum database: {Db}", dbFile);
+                _logger.LogWarning(ex, "Failed to vacuum database: {Db}", dbPath);
             }
         }
 
@@ -168,6 +171,13 @@ public sealed class LivingtreeHealthCheck : BackgroundService
         cmd.ExecuteNonQuery();
         cmd.CommandText = "VACUUM;";
         cmd.ExecuteNonQuery();
+    }
+
+    private static IEnumerable<string> DbFilesFallback()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, ".livingtree");
+        yield return Path.Combine(dir, "kg.db");
+        yield return Path.Combine(dir, "circuit_breaker.db");
     }
 
     public sealed class HealthCheckResult

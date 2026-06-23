@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using LTAI.AI;
 using LTAI.Agent.Context;
 using LTAI.Agent.Tools;
+using LTAI.Core.Configuration;
 using LTAI.Agent.CodeAnalysis;
 using LTAI.Agent.Utils;
 using Microsoft.Agents.AI;
@@ -34,10 +35,8 @@ public sealed class CgGraph : AIContextProvider
     private bool _built;
     private readonly ConcurrentDictionary<string, DateTime> _indexedFiles = new(StringComparer.OrdinalIgnoreCase);
     private TreeSitterParser? _parser;
-    private readonly MemoryCache _queryCache = new(new MemoryCacheOptions { SizeLimit =
-        int.TryParse(Environment.GetEnvironmentVariable("LTAI_CG_CACHE_SIZE"), out var cs) ? Math.Max(10, cs) : 100 });
-    private static readonly TimeSpan QueryCacheTtl = TimeSpan.FromSeconds(
-        int.TryParse(Environment.GetEnvironmentVariable("LTAI_CG_CACHE_TTL_SEC"), out var t) ? Math.Max(5, t) : 30);
+    private readonly MemoryCache _queryCache = new(new MemoryCacheOptions { SizeLimit = EnvironmentConfig.CgCacheSize });
+    private static readonly TimeSpan QueryCacheTtl = TimeSpan.FromSeconds(EnvironmentConfig.CgCacheTtlSec);
 
     // ── Precomputed Reach Index (Gortex-inspired) ──
     private ReachIndex? _reachIndex;

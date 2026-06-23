@@ -54,8 +54,12 @@ public static partial class ServiceCollectionExtensions
             return new KnowledgeExtractor(kg, llm, logger);
         });
         services.AddSingleton<KnowledgeQualityScorer>();
-        services.AddSingleton<ProvenanceTracker>();
-        services.AddSingleton<ProvenanceProvider>();
+        services.AddSingleton<ProvenanceProvider>(sp =>
+        {
+            var tracker = sp.GetRequiredService<ProvenanceTracker>();
+            var codeProv = sp.GetService<Delta.CodeProvenanceIndex>();
+            return new ProvenanceProvider(tracker, codeProv);
+        });
         services.AddSingleton<KnowledgeAssetTool>();
         services.AddSingleton<TaskQueueTool>(sp =>
             new TaskQueueTool(
@@ -105,7 +109,9 @@ public static partial class ServiceCollectionExtensions
 
         // Model switch bridge
         services.AddSingleton<LocalEmbedderModelSwitchNotifier>(sp =>
-            new LocalEmbedderModelSwitchNotifier(sp.GetService<LocalEmbedder>()));
+            new LocalEmbedderModelSwitchNotifier(
+                sp.GetRequiredService<IToolRegistry>(),
+                sp.GetService<LocalEmbedder>()));
 
         // Skill evolution engine
         services.AddSingleton<SkillValidationGate>(sp =>
@@ -139,6 +145,135 @@ public static partial class ServiceCollectionExtensions
         services.AddSingleton<PlanStore>();
         services.AddSingleton<TaskStore>();
         services.AddSingleton<Long2ShortTracker>();
+
+        // DeltaDB-inspired services (content-addressed delta log, CRDT worktree, code provenance)
+        services.AddSingleton<Delta.DeltaStore>(sp =>
+        {
+            var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>>().Value;
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Delta.DeltaStore>();
+            var store = new Delta.DeltaStore(opts.ResolveDataPath("deltas.db"), logger);
+            // Wire into FileSystemTools for delta tracking on every write
+            Tools.FileSystemTools.SetDeltaStore(store);
+            return store;
+        });
+
+        // ContextOffloader with predictive tracker + semantic compressor
+        services.AddSingleton<Memory.ContextOffloader>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Memory.ContextOffloader>();
+            var deltaStore = sp.GetService<Delta.DeltaStore>();
+            var predictive = sp.GetService<Memory.PredictiveOffloadTracker>();
+            var semantic = sp.GetService<Context.SemanticCompressor>();
+            return new Memory.ContextOffloader(logger, deltaStore, predictive, semantic);
+        });
+        services.AddSingleton<Delta.CrdtWorktree>(sp =>
+        {
+            var store = sp.GetRequiredService<Delta.DeltaStore>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Delta.CrdtWorktree>();
+            return new Delta.CrdtWorktree(store, logger);
+        });
+        services.AddSingleton<Delta.CodeProvenanceIndex>(sp =>
+        {
+            var store = sp.GetRequiredService<Delta.DeltaStore>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Delta.CodeProvenanceIndex>();
+            return new Delta.CodeProvenanceIndex(store, logger);
+        });
+
+        // Wire DeltaStore into ProvenanceTracker
+        services.AddSingleton<Indexing.ProvenanceTracker>(sp =>
+        {
+            var tracker = new Indexing.ProvenanceTracker();
+            tracker.DeltaStore = sp.GetService<Delta.DeltaStore>();
+            return tracker;
+        });
+
+        // Pipeline step: DeltaAnchor — generates delta IDs for tool-executed file edits
+        services.AddSingleton<Pipeline.Steps.DeltaAnchorStep>();
+
+        // Semantic compression (MiniLM/BGE sentence importance)
+        services.AddSingleton<Context.SemanticCompressor>(sp =>
+        {
+            var embedder = sp.GetService<LTAI.AI.EmbeddingClient>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Context.SemanticCompressor>();
+            return new Context.SemanticCompressor(embedder, logger);
+        });
+
+        // Predictive offload tracker (historical tool result size patterns)
+        services.AddSingleton<Memory.PredictiveOffloadTracker>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Memory.PredictiveOffloadTracker>();
+            return new Memory.PredictiveOffloadTracker(logger);
+        });
+
+        // Refs search index (FTS5 over .livingtree/refs/)
+        services.AddSingleton<Memory.RefsSearchIndex>(sp =>
+        {
+            var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>>().Value;
+            var refsDir = Path.Combine(AppContext.BaseDirectory, ".livingtree", "refs");
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Memory.RefsSearchIndex>();
+            var idx = new Memory.RefsSearchIndex(opts.ResolveDataPath("refs_search.db"), refsDir, logger);
+            // Index existing refs in background (fire-and-forget with error handling)
+            Task.Run(async () =>
+            {
+                try { await idx.IndexDirectoryAsync().ConfigureAwait(false); }
+                catch (Exception ex) { logger.LogWarning(ex, "RefsSearchIndex background indexing failed"); }
+            });
+            return idx;
+        });
+
+        // Tools for refs interaction (expand ref, search refs)
+        services.AddSingleton<Tools.ExpandRefTool>(sp =>
+        {
+            var offloader = sp.GetService<Memory.ContextOffloader>();
+            return new Tools.ExpandRefTool(offloader);
+        });
+        services.AddSingleton<Tools.RefsSearchTool>(sp =>
+        {
+            var index = sp.GetService<Memory.RefsSearchIndex>();
+            return new Tools.RefsSearchTool(index);
+        });
+
+        // DeerFlow-inspired: Container sandbox provider
+        services.AddSingleton<Tools.ContainerSandboxProvider>(sp =>
+        {
+            var ws = Directory.GetCurrentDirectory();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Tools.ContainerSandboxProvider>();
+            var mode = LTAI.Core.Configuration.EnvironmentConfig.SandboxMode;
+            return new Tools.ContainerSandboxProvider(ws, mode, logger);
+        });
+
+        // DeerFlow-inspired: IM Channel tool (Telegram/Slack/Feishu/DingTalk/WeChat)
+        services.AddSingleton<Tools.ImChannelTool>(sp =>
+        {
+            var httpFactory = sp.GetService<IHttpClientFactory>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Tools.ImChannelTool>();
+            return new Tools.ImChannelTool(httpFactory, logger);
+        });
+
+        // Refs garbage collector — TTL-based cleanup of .livingtree/refs/
+        services.AddSingleton<Memory.RefsGarbageCollector>(sp =>
+        {
+            var refsDir = Path.Combine(AppContext.BaseDirectory, ".livingtree", "refs");
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Memory.RefsGarbageCollector>();
+            var cfg = new Memory.CompactionConfig(); // default config
+            return new Memory.RefsGarbageCollector(refsDir, logger,
+                cleanupIntervalMinutes: cfg.Gc.CleanupIntervalMinutes,
+                ttlHours: cfg.Gc.TtlHours,
+                maxFiles: cfg.Gc.MaxFiles);
+        });
+        // Run GC on startup + background interval
+        services.AddHostedService(sp =>
+        {
+            var gc = sp.GetRequiredService<Memory.RefsGarbageCollector>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("RefsGcHostedService");
+            return new DelegatingHostedService("RefsGarbageCollector",
+                async ct =>
+                {
+                    await gc.CleanupAsync(ttlHours: 24, maxFiles: 10000).ConfigureAwait(false);
+                    logger.LogInformation("RefsGarbageCollector: initial cleanup complete");
+                },
+                logger);
+        });
 
         return services;
     }

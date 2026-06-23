@@ -11,30 +11,21 @@ public sealed class AgentDefinitionTests
     public void LoadAll_ReturnsAllAgents()
     {
         var defs = AllAgents;
-        Assert.Equal(21, defs.Count);
+        Assert.Equal(11, defs.Count);
     }
 
     [Theory]
     [InlineData("LTAI-Chat")]
-    [InlineData("LTAI-Chat-Pro")]
-    [InlineData("LTAI-Code")]
+    [InlineData("LTAI-Dev")]
     [InlineData("LTAI-Data")]
-    [InlineData("LTAI-Frontend")]
-    [InlineData("LTAI-LLM")]
+    [InlineData("LTAI-QA")]
+    [InlineData("LTAI-Ops")]
     [InlineData("LTAI-Math")]
     [InlineData("LTAI-System")]
     [InlineData("LTAI-Writer")]
-    [InlineData("LTAI-SQL")]
-    [InlineData("LTAI-API")]
     [InlineData("LTAI-Arch")]
-    [InlineData("LTAI-DCI")]
-    [InlineData("LTAI-Test")]
-    [InlineData("LTAI-Review")]
-    [InlineData("LTAI-Debug")]
-    [InlineData("LTAI-Security")]
-    [InlineData("LTAI-DevOps")]
     [InlineData("LTAI-Office")]
-    [InlineData("LTAI-ScrumMaster")]
+    [InlineData("LTAI-Explore")]
     public void EachAgent_ExistsAndHasRequiredFields(string agentName)
     {
         var def = AllAgents.FirstOrDefault(d => d.Name == agentName);
@@ -68,21 +59,6 @@ public sealed class AgentDefinitionTests
     {
         var chat = AllAgents.First(d => d.Name == "LTAI-Chat");
         Assert.Equal("l1", chat.ModelId);
-    }
-
-    [Fact]
-    public void ChatProAgent_HasModelIdL2()
-    {
-        var pro = AllAgents.First(d => d.Name == "LTAI-Chat-Pro");
-        Assert.Equal("l2", pro.ModelId);
-    }
-
-    [Fact]
-    public void LlmAgent_HasNoTools()
-    {
-        var llm = AllAgents.First(d => d.Name == "LTAI-LLM");
-        Assert.Empty(llm.Tools);
-        Assert.Empty(llm.Permissions);
     }
 
     [Fact]

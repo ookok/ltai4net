@@ -17,11 +17,14 @@ public class ChatController : ControllerBase
     private readonly TimeSpan _chatTimeout;
     private readonly TimeSpan _streamTimeout;
     private readonly int _maxMessageLength;
+    private readonly ChatScope _scope;
 
-    public ChatController(ChatAgent agent, ILogger<ChatController> logger, IOptions<LTAIOptions>? options = null)
+    public ChatController(ChatAgent agent, ILogger<ChatController> logger,
+        ChatScope scope, IOptions<LTAIOptions>? options = null)
     {
         _agent = agent;
         _logger = logger;
+        _scope = scope;
         var webConfig = options?.Value.Web;
         _chatTimeout = TimeSpan.FromSeconds(webConfig?.ChatTimeoutSeconds ?? 60);
         _streamTimeout = TimeSpan.FromSeconds(webConfig?.StreamTimeoutSeconds ?? 300);
@@ -43,7 +46,7 @@ public class ChatController : ControllerBase
         try
         {
             var reply = await _agent.ChatAsync(
-                request.Message, userId: request.UserId ?? RequestTraceId(), ct: cts.Token).ConfigureAwait(false);
+                request.Message, userId: request.UserId ?? _scope.TraceId, ct: cts.Token).ConfigureAwait(false);
             return Ok(new ChatResponse(reply));
         }
         catch (OperationCanceledException) when (!HttpContext.RequestAborted.IsCancellationRequested)

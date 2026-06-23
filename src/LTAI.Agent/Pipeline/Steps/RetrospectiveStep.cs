@@ -100,7 +100,7 @@ public sealed class RetrospectiveStep : IPipelineStep
         }
 
         context.Set("RetrospectiveRecord", record);
-        context.Messages.Add(new ChatMessage(ChatRole.System, sb.ToString()));
+        lock (context.MessagesLock) context.Messages.Add(new ChatMessage(ChatRole.System, sb.ToString()));
 
         _logger.LogInformation("Retrospective: {Agent} | {Tools} tools | {Duration:F1}s | {Outcome}",
             record.AgentName, toolCallCount, duration.TotalSeconds, record.Outcome);

@@ -24,7 +24,7 @@ public partial class MainWindow : Window
             .AddJsonFile("appsettings.json", optional: true)
             .Build();
         WarpMirrorUrl = cfg.GetSection("LTAI:Mirrors:WarpMsiUrl").Value
-            ?? "http://mogoo.com.cn/Cloudflare_WARP_2026.4.1390.0.msi";
+            ?? "https://github.com/cloudflare/cloudflare-warp/releases/download/2026.4.1390.0/Cloudflare_WARP_2026.4.1390.0.msi";
         InitializeComponent();
         SetupTrayIcon();
 

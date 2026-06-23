@@ -1,5 +1,5 @@
-using System.Collections.Concurrent;
 using LTAI.Agent.Mcp;
+using LTAI.Core.Caching;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,12 +9,20 @@ namespace LTAI.Agent;
 
 partial class AgentBuilder
 {
-    private static readonly ConcurrentDictionary<string, Task<IReadOnlyList<AITool>>> s_mcpToolsCache = new(StringComparer.OrdinalIgnoreCase);
-
     internal static void RegisterMcpTools(ToolSet tools, string name, IServiceProvider sp, LTAIOptions opts, bool canRead, bool canWrite, bool canExec)
     {
+        var cache = sp.GetRequiredService<LTAICacheFactory>().GetOrCreate<string, Task<IReadOnlyList<AITool>>>("mcp-tools-" + name, new LTAICacheOptions
+        {
+            MaxEntries = 64,
+            DefaultTtl = TimeSpan.FromMinutes(10)
+        });
         var mcpFactory = sp.GetRequiredService<McpClientFactory>();
-        var mcpTask = s_mcpToolsCache.GetOrAdd(name, _ => mcpFactory.GetToolsAsync(opts.Mcp));
+
+        if (!cache.TryGet(name, out var mcpTask))
+        {
+            mcpTask = mcpFactory.GetToolsAsync(opts.Mcp);
+            cache.Set(name, mcpTask);
+        }
 
         IReadOnlyList<AITool>? mcpTools;
         try

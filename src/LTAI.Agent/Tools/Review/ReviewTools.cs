@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using LTAI.AI;
 using LTAI.Agent.Memory;
 using LTAI.Agent.Utils;
+using LTAI.Core.Configuration;
 using LibGit2Sharp;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -34,11 +35,9 @@ public sealed class ReviewTools
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = false,
     };
-    private static readonly int MaxAuditEntries = int.TryParse(
-        Environment.GetEnvironmentVariable("LTAI_AUDIT_MAX_ENTRIES"), out var m) ? Math.Max(100, m) : 2000;
+    private static readonly int MaxAuditEntries = EnvironmentConfig.AuditMaxEntries;
 
-    private static readonly int ReviewParallelism = int.TryParse(
-        Environment.GetEnvironmentVariable("LTAI_REVIEW_PARALLELISM"), out var rp) ? Math.Max(1, Math.Min(8, rp)) : 4;
+    private static readonly int ReviewParallelism = EnvironmentConfig.ReviewParallelism;
 
     private static readonly SemaphoreSlim ReviewConcurrencyGate = new(ReviewParallelism, ReviewParallelism);
 
@@ -1104,7 +1103,7 @@ public sealed class ReviewTools
                     using var repo = new LibGit2Sharp.Repository(repoPath);
                     var relativePath = Path.GetRelativePath(repo.Info.WorkingDirectory, gatePath);
                     Commands.Stage(repo, relativePath);
-                    repo.Commit($"chore(gates): freeze audit gates for {name} ({openFindings.Count} findings)", new Signature("LTAI-Review", "review@ltai", DateTimeOffset.Now), new Signature("LTAI-Review", "review@ltai", DateTimeOffset.Now));
+                    repo.Commit($"chore(gates): freeze audit gates for {name} ({openFindings.Count} findings)", new Signature("LTAI-QA", "qa@ltai", DateTimeOffset.Now), new Signature("LTAI-QA", "qa@ltai", DateTimeOffset.Now));
                 }
             }
             catch (Exception) { System.Diagnostics.Debug.WriteLine("[ReviewTools] Git not available"); }

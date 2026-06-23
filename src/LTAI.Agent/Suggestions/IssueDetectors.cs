@@ -11,6 +11,7 @@
 //  scans (each detector runs in <200ms for typical repos).
 // ═══════════════════════════════════════════════════════════════
 
+using LTAI.Core.Configuration;
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
@@ -19,8 +20,7 @@ namespace LTAI.Agent.Suggestions;
 
 internal static class IssueDetectorConcurrency
 {
-    public static readonly int MaxDop = int.TryParse(
-        Environment.GetEnvironmentVariable("LTAI_ISSUE_DETECTOR_MAX_DOP"), out var d) ? Math.Max(1, d) : 4;
+    public static readonly int MaxDop = EnvironmentConfig.IssueDetectorMaxDop;
 }
 
 // ═══════════════════════════════════════════════════════════════

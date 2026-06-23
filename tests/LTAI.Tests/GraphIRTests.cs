@@ -93,15 +93,15 @@ public sealed class ComposedWorkflowTemplateTests
 
         var args = new Dictionary<string, string>
         {
-            ["name"] = "LTAI-Code",
+            ["name"] = "LTAI-Dev",
             ["condition"] = "true",
         };
 
         var ir = template.Instantiate(args);
         Assert.Equal("test-graph", ir.Name);
         var node = Assert.Single(ir.Nodes);
-        Assert.Equal("agent-LTAI-Code", node.Id);
-        Assert.Equal("LTAI-Code", node.AgentName);
+        Assert.Equal("agent-LTAI-Dev", node.Id);
+        Assert.Equal("LTAI-Dev", node.AgentName);
         var edge = Assert.Single(ir.Edges);
         Assert.Equal("agent-LTAI-Code", edge.To);
         Assert.Equal("true", edge.Condition);

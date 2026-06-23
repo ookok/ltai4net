@@ -166,9 +166,12 @@ public sealed record ProviderInfo(
     [JsonIgnore]
     public string EnvVar => EnvVars.Length > 0 ? EnvVars[0] : "";
 
-    /// <summary>Whether this provider has a usable API endpoint and format.</summary>
+    /// <summary>Whether this provider has a usable LLM endpoint, format, and at least one text-generation model.</summary>
     [JsonIgnore]
-    public bool IsLlmProvider => Endpoint != null && ApiFormat != ApiFormat.Unknown;
+    public bool IsLlmProvider =>
+        Endpoint != null
+        && ApiFormat != ApiFormat.Unknown
+        && Models.Any(m => m.ContextWindow > 0);
 
     /// <summary>Number of models offered by this provider.</summary>
     [JsonIgnore]

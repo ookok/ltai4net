@@ -1,3 +1,4 @@
+using LTAI.Core.Configuration;
 using System.Collections.Concurrent;
 
 namespace LTAI.Agent.Context;
@@ -26,9 +27,7 @@ internal static class ContrastiveFeedbackStore
         DateTime Timestamp);
 
     private static readonly ConcurrentQueue<FeedbackEntry> Buffer = new();
-    private static readonly int MaxEntries = int.TryParse(
-        Environment.GetEnvironmentVariable("LTAI_CONTRASTIVE_FEEDBACK_MAX"),
-        out var m) ? Math.Clamp(m, 100, 50000) : 5000;
+    private static readonly int MaxEntries = EnvironmentConfig.ContrastiveFeedbackMax;
 
     private static int _totalDiscarded;
     private static readonly object _calibrateLock = new();

@@ -1,3 +1,4 @@
+using LTAI.Core.Configuration;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -16,12 +17,10 @@ public sealed class MemoryConsolidationService : BackgroundService
     private readonly MultiGraphStore? _multiGraph;
     private readonly IChatClient? _llm;
     private readonly ILogger<MemoryConsolidationService>? _logger;
-    private static readonly TimeSpan Interval = TimeSpan.FromMinutes(
-        int.TryParse(Environment.GetEnvironmentVariable("LTAI_MEMORY_CONSOLIDATION_MINUTES"), out var m) ? Math.Max(5, m) : 30);
+    private static readonly TimeSpan Interval = TimeSpan.FromMinutes(EnvironmentConfig.MemoryConsolidationMinutes);
 
     // LLM summarization rate limiter: max calls per consolidation cycle
-    private static readonly int MaxSummarizePerCycle = int.TryParse(
-        Environment.GetEnvironmentVariable("LTAI_MEMORY_SUMMARIZE_MAX_PER_CYCLE"), out var mc) ? Math.Max(1, mc) : 10;
+    private static readonly int MaxSummarizePerCycle = EnvironmentConfig.MemorySummarizeMaxPerCycle;
     private static readonly int SummarizePromptMaxChars = 8000; // prevent oversized LLM prompts
 
     public MemoryConsolidationService(PalaceStore store, IChatClient? llm = null,

@@ -19,7 +19,7 @@ namespace LTAI.TUI;
 
 public static class Program
 {
-    private static string s_wtDownloadUrl = "http://mogoo.com.cn/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
+    private static string s_wtDownloadUrl = "https://github.com/microsoft/terminal/releases/download/v1.24.11321.0/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
     private static readonly HttpClient s_httpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
 
     public static async Task Main(string[] args)
@@ -75,7 +75,7 @@ public static class Program
             .AddJsonFile("appsettings.json", optional: true)
             .Build();
         s_wtDownloadUrl = earlyConfig.GetSection("LTAI:Mirrors:WindowsTerminalUrl").Value
-            ?? "http://mogoo.com.cn/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
+            ?? "https://github.com/microsoft/terminal/releases/download/v1.24.11321.0/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
 
         // ── Windows Terminal selection ──
         if (OperatingSystem.IsWindows() && (args.Length == 0 || args[0] != "--in-wt"))

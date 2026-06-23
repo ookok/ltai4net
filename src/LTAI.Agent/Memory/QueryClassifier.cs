@@ -1,3 +1,4 @@
+using LTAI.Core.Configuration;
 using System.Linq;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -34,8 +35,7 @@ public sealed class QueryClassifier
         "search", "find", "write", "read", "delete", "create", "execute", "run", "compute", "analyze", "translate", "summarize",
     ];
 
-    private static readonly int _greetingMaxLength = int.TryParse(
-        Environment.GetEnvironmentVariable("LTAI_GREETING_MAX_LENGTH"), out var g) ? Math.Max(3, g) : 15;
+    private static readonly int _greetingMaxLength = EnvironmentConfig.GreetingMaxLength;
 
     public QueryClassifier(IntentRouter intentRouter, ILogger<QueryClassifier>? logger = null)
     {

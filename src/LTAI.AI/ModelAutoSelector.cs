@@ -127,9 +127,9 @@ public sealed class ModelAutoSelector
         CancellationToken ct)
     {
         // Environment variable overrides: LTAI_L1_MODEL, LTAI_L2_MODEL, LTAI_L3_MODEL
-        configuredL1 ??= Environment.GetEnvironmentVariable("LTAI_L1_MODEL");
-        configuredL2 ??= Environment.GetEnvironmentVariable("LTAI_L2_MODEL");
-        configuredL3 ??= Environment.GetEnvironmentVariable("LTAI_L3_MODEL");
+        configuredL1 ??= EnvironmentConfig.L1Model;
+        configuredL2 ??= EnvironmentConfig.L2Model;
+        configuredL3 ??= EnvironmentConfig.L3Model;
         var provider = _registry.FindProvider(providerId);
         if (provider == null)
         {

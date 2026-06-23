@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using LTAI.Core.Configuration;
 using LTAI.Core.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -63,7 +64,7 @@ public sealed class YAMLWorkflowWatcher : IDisposable
         {
             IncludeSubdirectories = false,
             Filter = "*.yaml",
-            InternalBufferSize = int.TryParse(Environment.GetEnvironmentVariable("LTAI_WATCHER_BUFFER"), out var b) ? Math.Max(8192, b) : 65536,
+            InternalBufferSize = EnvironmentConfig.WatcherBuffer,
             NotifyFilter = NotifyFilters.FileName
                          | NotifyFilters.LastWrite
                          | NotifyFilters.Size
@@ -97,7 +98,7 @@ public sealed class YAMLWorkflowWatcher : IDisposable
             {
                 IncludeSubdirectories = false,
                 NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName,
-                InternalBufferSize = int.TryParse(Environment.GetEnvironmentVariable("LTAI_WATCHER_BUFFER"), out var b) ? Math.Max(8192, b) : 65536, // 64KB (default is 8KB)
+                InternalBufferSize = EnvironmentConfig.WatcherBuffer, // 64KB (default is 8KB)
             };
             _fsWatcher.Changed += OnChanged;
             _fsWatcher.Renamed += OnRenamed;

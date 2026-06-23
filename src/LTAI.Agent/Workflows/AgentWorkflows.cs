@@ -8,6 +8,7 @@ using LTAI.AI;
 using LTAI.Agent.Diagnostics;
 using LTAI.Agent.Memory;
 using LTAI.Agent.Orchestration;
+using LTAI.Core.Configuration;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Declarative;
@@ -40,8 +41,7 @@ namespace LTAI.Agent.Workflows;
 /// </summary>
 public sealed class AgentWorkflows
 {
-    private static readonly int _wfConcurrency = int.TryParse(
-        Environment.GetEnvironmentVariable("LTAI_WORKFLOW_CONCURRENCY"), out var c) ? Math.Max(1, c) : 6;
+    private static readonly int _wfConcurrency = EnvironmentConfig.WorkflowConcurrency;
     private readonly SemaphoreSlim _throttle = new(_wfConcurrency, _wfConcurrency);
     private readonly TimeSpan _workflowTimeout;
 

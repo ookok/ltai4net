@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Linq;
 using System.Reflection;
@@ -28,77 +29,140 @@ namespace LTAI.AI;
 ///   2. Remote API providers
 ///   3. BM25 (FastEmb) fallback
 ///
-/// Backward-compatible static access preserved.
-/// DI users inject <see cref="IToolRegistry"/> (same singleton instance).
+/// 所有 public static 方法为向后兼容的转发器，
+/// 内部使用 Singleton 实例状态。建议新代码注入 IToolRegistry。
 /// </summary>
 public sealed class ToolRegistry : IToolRegistry
 {
     /// <summary>Shared default instance for static method delegation and DI.</summary>
-    private static readonly Lazy<ToolRegistry> _default = new(() => new ToolRegistry());
+    private static ToolRegistry? _default;
+    private static readonly object _defaultLock = new();
+    private static ToolRegistry Default
+    {
+        get
+        {
+            if (_default == null)
+            {
+                lock (_defaultLock)
+                {
+                    _default ??= new ToolRegistry();
+                }
+            }
+            return _default;
+        }
+        set
+        {
+            lock (_defaultLock)
+            {
+                _default = value;
+            }
+        }
+    }
+
+    /// <summary>Set the default instance (for test isolation).</summary>
+    public static void SetDefault(ToolRegistry instance) => Default = instance ?? throw new ArgumentNullException(nameof(instance));
 
     /// <summary>单个工具的定义 + embedding + domain。</summary>
     public sealed record ToolDef(string Name, string Description, float[] Embedding, string Domain = "");
 
-    // ═══════════════════════════════════════════
-    //  Static implementation (preserved for backward compat)
-    // ═══════════════════════════════════════════
-
-    private static readonly List<ToolDef> _tools = new();
-    private static volatile bool _initialized;
-    private static readonly object _lock = new();
-    private static volatile IReadOnlyList<ToolDef> _snapshot = Array.Empty<ToolDef>();
-
-    /// <summary>True if ToolRegistry has been initialized at least once.</summary>
-    public static bool IsInitialized => _initialized;
-
-    // ── Usage statistics ──
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ToolStats> _stats = new(StringComparer.OrdinalIgnoreCase);
+    // ── Usage statistics record ──
     public sealed record ToolStats(string Name, long CallCount, long SuccessCount, long TotalLatencyMs, double AvgLatencyMs)
     {
         public double SuccessRate => CallCount > 0 ? (double)SuccessCount / CallCount : 1.0;
     }
 
+    // ═══════════════════════════════════════════
+    //  Static forwarding API (backward compatible)
+    //  Retained for Desktop project and test compatibility.
+    //  New code should inject IToolRegistry via DI.
+    // ═══════════════════════════════════════════
+
+    /// <summary>True if ToolRegistry has been initialized at least once.</summary>
+    public static bool IsInitialized => Default._initialized;
+
+    /// <summary>获取所有已注册的工具（快照，线程安全）。</summary>
+    public static IReadOnlyList<ToolDef> AllTools => Default._snapshot;
+
     /// <summary>Record a tool call result for metrics.</summary>
     public static void RecordCall(string toolName, bool success, long latencyMs)
+        => Default.RecordCallInternal(toolName, success, latencyMs);
+
+    /// <summary>
+    /// 初始化工具注册表：构建向量 embedding + BM25 倒排索引。
+    /// </summary>
+    public static async Task InitializeAsync(IEnumerable<AITool> tools, EmbeddingClient embedder,
+        ToolEmbeddingCache? cache = null, CancellationToken ct = default)
+        => await Default.InitializeInternalAsync(tools, embedder, cache, ct).ConfigureAwait(false);
+
+    /// <summary>按用户查询检索 Top-K 个最相关的工具（全领域）。</summary>
+    public static async Task<List<ToolDef>> SearchTopKAsync(string query, EmbeddingClient embedder,
+        int k = 8, CancellationToken ct = default)
+        => await Default.SearchTopKInternalAsync(query, embedder, null, k, null, ct).ConfigureAwait(false);
+
+    /// <summary>按用户查询检索 Top-K 个最相关的工具（支持按 domain 加权）。</summary>
+    public static async Task<List<ToolDef>> SearchTopKAsync(string query, EmbeddingClient embedder,
+        string? domain, int k = 8, CancellationToken ct = default)
+        => await Default.SearchTopKInternalAsync(query, embedder, domain, k, null, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// 按用户查询检索 Top-K 个最相关的工具（支持预计算嵌入以避免重复 ONNX 调用）。
+    /// </summary>
+    public static async Task<List<ToolDef>> SearchTopKAsync(string query, EmbeddingClient embedder,
+        string? domain, int k, float[]? queryEmbedding, CancellationToken ct = default)
+        => await Default.SearchTopKInternalAsync(query, embedder, domain, k, queryEmbedding, ct).ConfigureAwait(false);
+
+    /// <summary>按 domain 获取工具列表（线程安全）。</summary>
+    public static IReadOnlyList<ToolDef> GetToolsByDomain(string domain)
     {
-        _stats.AddOrUpdate(toolName,
-            _ => new ToolStats(toolName, 1, success ? 1 : 0, latencyMs, latencyMs),
-            (_, old) => old with
-            {
-                CallCount = old.CallCount + 1,
-                SuccessCount = old.SuccessCount + (success ? 1 : 0),
-                TotalLatencyMs = old.TotalLatencyMs + latencyMs,
-                AvgLatencyMs = (old.TotalLatencyMs + latencyMs) / (double)(old.CallCount + 1)
-            });
+        var snap = Default._snapshot;
+        return snap.Where(t => string.Equals(t.Domain, domain, StringComparison.OrdinalIgnoreCase)).ToList();
     }
 
-    /// <summary>Get all tool invocation statistics.</summary>
-    public static IReadOnlyDictionary<string, ToolStats> GetAllStats() =>
-        new Dictionary<string, ToolStats>(_stats);
+    /// <summary>清空注册表（用于测试或重新加载）。</summary>
+    public static void Clear() => Default.ClearInternal();
 
-    /// <summary>Get stats for a specific tool.</summary>
-    public static ToolStats? GetStats(string toolName) =>
-        _stats.TryGetValue(toolName, out var s) ? s : null;
+    /// <summary>Reset all usage statistics (for test isolation).</summary>
+    public static void ClearStats() => Default._stats.Clear();
 
-    /// <summary>Reset all statistics.</summary>
-    public static void ResetStats() => _stats.Clear();
+    /// <summary>标记所有工具 embedding 为失效。</summary>
+    public static void ClearEmbeddings() => Default.ClearEmbeddingsInternal();
 
     // ═══════════════════════════════════════════
-    //  BM25 倒排索引
+    //  Instance state (non-static, per-instance)
     // ═══════════════════════════════════════════
 
-    /// <summary>倒排索引: term → (docId, termFrequency) 列表</summary>
-    private static Dictionary<string, List<(int docId, int tf)>> _invertedIndex = new();
-    /// <summary>每个文档的长度（词数）</summary>
-    private static int[] _docLengths = [];
-    /// <summary>包含每个 term 的文档数</summary>
-    private static Dictionary<string, int> _docFreq = new();
-    private static int _docFreqCount;
-    private static volatile int _bm25Version;
-    /// <summary>语料库总文档数</summary>
-    private static int _totalDocs;
-    /// <summary>平均文档长度</summary>
-    private static double _avgDocLen;
+    private readonly List<ToolDef> _tools = new();
+    private volatile bool _initialized;
+    private readonly object _lock = new();
+    private volatile IReadOnlyList<ToolDef> _snapshot = Array.Empty<ToolDef>();
+
+    // ── Usage statistics ──
+    private readonly ConcurrentDictionary<string, ToolStats> _stats = new(StringComparer.OrdinalIgnoreCase);
+
+    // ── BM25 倒排索引 ──
+    private Dictionary<string, List<(int docId, int tf)>> _invertedIndex = new(StringComparer.OrdinalIgnoreCase);
+    private int[] _docLengths = [];
+    private Dictionary<string, int> _docFreq = new(StringComparer.OrdinalIgnoreCase);
+    private int _docFreqCount;
+    private volatile int _bm25Version;
+    private int _totalDocs;
+    private double _avgDocLen;
+
+    /// <summary>BM25 参数</summary>
+    private const float Bm25K1 = 1.2f;
+    private const float Bm25B = 0.75f;
+
+    /// <summary>RRF 融合常数（与 KbGraph 一致）</summary>
+    private const int RrfK = 60;
+
+    /// <summary>各路检索的 Top-N</summary>
+    private const int Bm25TopN = 50;
+    private const int VectorTopN = 50;
+    private const int RrfTopN = 30;
+
+    /// <summary>Majority voting penalty for single-path-only tools (0-1).</summary>
+    private const double MajorityVotePenalty = 0.3;
+
     /// <summary>停用词表</summary>
     private static readonly HashSet<string> _stopwords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -118,20 +182,53 @@ public sealed class ToolRegistry : IToolRegistry
         "没有", "看", "好", "自己", "这", "他", "她", "它", "们", "那", "些",
     };
 
-    /// <summary>BM25 参数</summary>
-    private const float Bm25K1 = 1.2f;
-    private const float Bm25B = 0.75f;
+    // ═══════════════════════════════════════════
+    //  IToolRegistry explicit interface implementation
+    //  (delegates to instance methods)
+    // ═══════════════════════════════════════════
 
-    /// <summary>RRF 融合常数（与 KbGraph 一致）</summary>
-    private const int RrfK = 60;
+    bool IToolRegistry.IsInitialized => _initialized;
+    IReadOnlyList<ToolDef> IToolRegistry.AllTools => _snapshot;
 
-    /// <summary>各路检索的 Top-N</summary>
-    private const int Bm25TopN = 50;
-    private const int VectorTopN = 50;
-    private const int RrfTopN = 30;
+    Task IToolRegistry.InitializeAsync(IEnumerable<AITool> tools, EmbeddingClient embedder,
+        ToolEmbeddingCache? cache, CancellationToken ct)
+        => InitializeInternalAsync(tools, embedder, cache, ct);
 
-    /// <summary>Majority voting penalty for single-path-only tools (0-1).</summary>
-    private const double MajorityVotePenalty = 0.3;
+    Task<List<ToolDef>> IToolRegistry.SearchTopKAsync(string query, EmbeddingClient embedder,
+        int k, CancellationToken ct)
+        => SearchTopKInternalAsync(query, embedder, null, k, null, ct);
+
+    Task<List<ToolDef>> IToolRegistry.SearchTopKAsync(string query, EmbeddingClient embedder,
+        string? domain, int k, CancellationToken ct)
+        => SearchTopKInternalAsync(query, embedder, domain, k, null, ct);
+
+    Task<List<ToolDef>> IToolRegistry.SearchTopKAsync(string query, EmbeddingClient embedder,
+        string? domain, int k, float[]? queryEmbedding, CancellationToken ct)
+        => SearchTopKInternalAsync(query, embedder, domain, k, queryEmbedding, ct);
+
+    void IToolRegistry.RecordCall(string toolName, bool success, long latencyMs)
+        => RecordCallInternal(toolName, success, latencyMs);
+
+    IReadOnlyDictionary<string, ToolStats> IToolRegistry.GetAllStats()
+        => new Dictionary<string, ToolStats>(_stats);
+
+    ToolStats? IToolRegistry.GetStats(string toolName)
+        => _stats.TryGetValue(toolName, out var s) ? s : null;
+
+    void IToolRegistry.ResetStats() => _stats.Clear();
+
+    IReadOnlyList<ToolDef> IToolRegistry.GetToolsByDomain(string domain)
+    {
+        return _snapshot.Where(t => string.Equals(t.Domain, domain, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    void IToolRegistry.Clear() => ClearInternal();
+
+    void IToolRegistry.ClearEmbeddings() => ClearEmbeddingsInternal();
+
+    // ═══════════════════════════════════════════
+    //  Instance implementation methods
+    // ═══════════════════════════════════════════
 
     /// <summary>
     /// 构建工具的 embedding 文本（domain + 5 部分自然语言段落）。
@@ -195,16 +292,20 @@ public sealed class ToolRegistry : IToolRegistry
         return [];
     }
 
-    /// <summary>初始化工具注册表：构建向量 embedding + BM25 倒排索引。</summary>
-    /// <remarks>
-    /// P12.2: pass a <see cref="ToolEmbeddingCache"/> to persist tool
-    /// embeddings across process restarts. On first call the cache miss
-    /// triggers a single batched ONNX call for all 80+ tools; on subsequent
-    /// calls (or after a restart) the cache hit eliminates the embedding work
-    /// entirely. Without a cache, falls back to a one-shot batched ONNX call
-    /// (no persistence).
-    /// </remarks>
-    public static async Task InitializeAsync(IEnumerable<AITool> tools, EmbeddingClient embedder,
+    private void RecordCallInternal(string toolName, bool success, long latencyMs)
+    {
+        _stats.AddOrUpdate(toolName,
+            _ => new ToolStats(toolName, 1, success ? 1 : 0, latencyMs, latencyMs),
+            (_, old) => old with
+            {
+                CallCount = old.CallCount + 1,
+                SuccessCount = old.SuccessCount + (success ? 1 : 0),
+                TotalLatencyMs = old.TotalLatencyMs + latencyMs,
+                AvgLatencyMs = (old.TotalLatencyMs + latencyMs) / (double)(old.CallCount + 1)
+            });
+    }
+
+    private async Task InitializeInternalAsync(IEnumerable<AITool> tools, EmbeddingClient embedder,
         ToolEmbeddingCache? cache = null, CancellationToken ct = default)
     {
         // Volatile check (fast path, no lock)
@@ -216,8 +317,6 @@ public sealed class ToolRegistry : IToolRegistry
         float[][] embeddings;
         if (cache != null)
         {
-            // Persisted batched path: 1 ONNX call on first start, 0 calls on
-            // warm starts (cache hit).
             try
             {
                 var items = list
@@ -232,13 +331,11 @@ public sealed class ToolRegistry : IToolRegistry
             }
             catch
             {
-                // Cache path failed — fall through to direct batch
                 embeddings = await DirectBatchAsync(embedder, texts, ct).ConfigureAwait(false);
             }
         }
         else
         {
-            // One-shot batched path (no persistence)
             embeddings = await DirectBatchAsync(embedder, texts, ct).ConfigureAwait(false);
         }
 
@@ -253,9 +350,6 @@ public sealed class ToolRegistry : IToolRegistry
         // ── BM25 倒排索引 ──
         lock (_lock)
         {
-            // Double-check after acquiring the lock.
-            // If Clear() was called between the volatile check and here,
-            // _initialized is false and we proceed correctly.
             if (_initialized) return;
             BuildBm25Index(texts);
             _tools.AddRange(defs);
@@ -266,7 +360,7 @@ public sealed class ToolRegistry : IToolRegistry
     }
 
     /// <summary>从工具文本构建 BM25 倒排索引。</summary>
-    private static void BuildBm25Index(string[] texts)
+    private void BuildBm25Index(string[] texts)
     {
         _totalDocs = texts.Length;
         _docLengths = new int[_totalDocs];
@@ -280,7 +374,6 @@ public sealed class ToolRegistry : IToolRegistry
             _docLengths[docId] = terms.Length;
             totalTerms += terms.Length;
 
-            // 文档内的词频
             var tf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var term in terms)
             {
@@ -305,7 +398,7 @@ public sealed class ToolRegistry : IToolRegistry
     }
 
     /// <summary>BM25 检索：返回 (docId, score) 列表。</summary>
-    private static List<(int docId, float score)> SearchBM25(string query)
+    private List<(int docId, float score)> SearchBM25(string query)
     {
         if (_totalDocs == 0) return [];
 
@@ -357,16 +450,14 @@ public sealed class ToolRegistry : IToolRegistry
             pool.Return(scores);
         }
 
-        // If BM25 index was rebuilt during search, results may be invalid — return empty
         if (Volatile.Read(ref _bm25Version) != versionAtStart) return [];
 
         return top.UnorderedItems.Select(x => (x.Element.docId, (float)x.Element.score)).ToList();
     }
 
-    private static float ComputeIdf(string term)
+    private float ComputeIdf(string term)
     {
         if (!_docFreq.TryGetValue(term, out var df)) return 0;
-        // BM25 IDF: log(1 + (N - df + 0.5) / (df + 0.5))
         return (float)Math.Log(1.0 + (_totalDocs - df + 0.5) / (df + 0.5));
     }
 
@@ -375,7 +466,6 @@ public sealed class ToolRegistry : IToolRegistry
     {
         if (string.IsNullOrEmpty(text)) return [];
         var lower = text.ToLowerInvariant();
-        // 按非字母数字拆分（保留中文、英文、数字）
         var tokens = lower.Split(
             [' ', '\n', '\r', '\t', '.', ',', ';', ':', '(', ')', '[', ']', '{', '}',
              '"', '\'', '!', '?', '-', '_', '/', '\\', '|', '@', '#', '$', '%', '^', '&', '*',
@@ -385,30 +475,11 @@ public sealed class ToolRegistry : IToolRegistry
         return tokens;
     }
 
-    // ═══════════════════════════════════════════
-    //  检索入口
-    // ═══════════════════════════════════════════
-
-    /// <summary>按用户查询检索 Top-K 个最相关的工具（全领域）。</summary>
-    public static async Task<List<ToolDef>> SearchTopKAsync(string query, EmbeddingClient embedder,
-        int k = 8, CancellationToken ct = default)
-        => await SearchTopKAsync(query, embedder, null, k, null, ct).ConfigureAwait(false);
-
-    /// <summary>按用户查询检索 Top-K 个最相关的工具（支持按 domain 加权）。</summary>
-    public static async Task<List<ToolDef>> SearchTopKAsync(string query, EmbeddingClient embedder,
-        string? domain, int k = 8, CancellationToken ct = default)
-        => await SearchTopKAsync(query, embedder, domain, k, null, ct).ConfigureAwait(false);
-
-    /// <summary>
-    /// 按用户查询检索 Top-K 个最相关的工具（支持预计算嵌入以避免重复 ONNX 调用）。
-    /// </summary>
-    public static async Task<List<ToolDef>> SearchTopKAsync(string query, EmbeddingClient embedder,
+    private async Task<List<ToolDef>> SearchTopKInternalAsync(string query, EmbeddingClient embedder,
         string? domain, int k, float[]? queryEmbedding, CancellationToken ct = default)
     {
         if (!_initialized || _tools.Count == 0) return new List<ToolDef>();
 
-        // P14.8: lazy re-embed tools whose embedding is empty (model switched).
-        // Single batched call via EmbeddingClient; skips if all tools have vectors.
         if (_tools.Any(t => t.Embedding.Length == 0))
         {
             try
@@ -460,7 +531,7 @@ public sealed class ToolRegistry : IToolRegistry
 
         // ── RRF 融合 ──
         const float DomainBoost = 0.15f;
-        var rrf = new Dictionary<int, double>(); // docId → RRF score
+        var rrf = new Dictionary<int, double>();
 
         int rank = 0;
         foreach (var (docId, _) in bm25Results)
@@ -470,11 +541,6 @@ public sealed class ToolRegistry : IToolRegistry
         foreach (var (docId, _) in vecResults)
             rrf[docId] = rrf.GetValueOrDefault(docId) + 1.0 / (RrfK + rank++);
 
-        // ── Cross-Retrieval Majority Voting ──
-        // Inspired by FlashMemory-DeepSeek-V4: an entry is golden only if it
-        // receives consensus from multiple independent retrieval "layers".
-        // Tool candidates retrieved by BOTH BM25 AND Vector pass majority vote;
-        // those retrieved by only one path get a score penalty.
         var bm25Set = new HashSet<int>(bm25Results.Select(r => r.docId));
         var vecSet = new HashSet<int>(vecResults.Select(r => r.idx));
 
@@ -487,82 +553,25 @@ public sealed class ToolRegistry : IToolRegistry
             .Select(x => (
                 x.tool,
                 score: x.score * (bm25Set.Contains(x.docId) && vecSet.Contains(x.docId)
-                    ? 1.0   // majority consensus: both BM25 + Vector agree
-                    : MajorityVotePenalty))) // single-path: apply penalty
+                    ? 1.0
+                    : MajorityVotePenalty)))
             .OrderByDescending(x => x.score)
             .Take(k)
             .Select(x => x.tool)
             .ToList();
 
-        // Track token savings: naive listing of all tools vs top-K
         if (final.Count > 0)
         {
-            var naiveTokens = _tools.Count * 20; // ~20 tokens per full tool description
-            var actualTokens = final.Count * 15; // ~15 tokens per concise tool result
+            var naiveTokens = _tools.Count * 20;
+            var actualTokens = final.Count * 15;
             LTAI.Core.Configuration.TokenSavingsTracker.RecordLookup(naiveTokens, actualTokens);
         }
 
         return final;
     }
 
-    // ═══════════════════════════════════════════
-    //  辅助方法
-    // ═══════════════════════════════════════════
-
-    /// <summary>获取所有已注册的工具（快照，线程安全）。</summary>
-    public static IReadOnlyList<ToolDef> AllTools => _snapshot;
-
-    /// <summary>按 domain 获取工具列表（线程安全）。</summary>
-    public static IReadOnlyList<ToolDef> GetToolsByDomain(string domain)
-    {
-        return _snapshot.Where(t => string.Equals(t.Domain, domain, StringComparison.OrdinalIgnoreCase)).ToList();
-    }
-
-    /// <summary>清空注册表（用于测试或重新加载）。</summary>
-    public static void Clear()
-    {
-        lock (_lock)
-        {
-            _tools.Clear();
-            _invertedIndex.Clear();
-            _docLengths = [];
-            _docFreq.Clear();
-            _totalDocs = 0;
-            _avgDocLen = 0;
-            _initialized = false;
-            _snapshot = [];
-            _stats.Clear();
-            _bm25Version = 0;
-        }
-    }
-
-    /// <summary>Reset all usage statistics (for test isolation).</summary>
-    public static void ClearStats() => _stats.Clear();
-
     /// <summary>
-    /// P14.8: mark all stored tool embeddings as stale (sentinel
-    /// <see cref="Array.Empty{T}"/>). Next <see cref="SearchTopKAsync"/> call
-    /// re-embeds every tool on the fly (single batched ONNX call) so
-    /// semantic vectors track the active model.
-    /// </summary>
-    public static void ClearEmbeddings()
-    {
-        lock (_lock)
-        {
-            for (int i = 0; i < _tools.Count; i++)
-            {
-                var t = _tools[i];
-                if (t.Embedding.Length > 0)
-                    _tools[i] = t with { Embedding = Array.Empty<float>() };
-            }
-            _snapshot = _tools.ToArray();
-        }
-    }
-
-    /// <summary>
-    /// P12.2: helper — direct batched embedding with FastEmb fallback.
-    /// Used when no <see cref="ToolEmbeddingCache"/> is supplied (or the
-    /// cache path failed). Single ONNX call for all texts.
+    /// direct batched embedding with FastEmb fallback.
     /// </summary>
     private static async Task<float[][]> DirectBatchAsync(EmbeddingClient embedder,
         string[] texts, CancellationToken ct)
@@ -580,40 +589,36 @@ public sealed class ToolRegistry : IToolRegistry
     private static float CosineSimilarity(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
         => VectorMath.CosineSimilarity(a, b);
 
-    // ═══════════════════════════════════════════
-    //  IToolRegistry explicit interface implementation
-    //  (delegates to static methods above)
-    // ═══════════════════════════════════════════
+    private void ClearInternal()
+    {
+        lock (_lock)
+        {
+            _tools.Clear();
+            _invertedIndex.Clear();
+            _docLengths = [];
+            _docFreq.Clear();
+            _totalDocs = 0;
+            _avgDocLen = 0;
+            _initialized = false;
+            _snapshot = [];
+            _stats.Clear();
+            _bm25Version = 0;
+        }
+    }
 
-    bool IToolRegistry.IsInitialized => _initialized;
-    IReadOnlyList<ToolDef> IToolRegistry.AllTools => _snapshot;
-
-    Task IToolRegistry.InitializeAsync(IEnumerable<AITool> tools, EmbeddingClient embedder, ToolEmbeddingCache? cache, CancellationToken ct)
-        => InitializeAsync(tools, embedder, cache, ct);
-
-    Task<List<ToolDef>> IToolRegistry.SearchTopKAsync(string query, EmbeddingClient embedder, int k, CancellationToken ct)
-        => SearchTopKAsync(query, embedder, k, ct);
-
-    Task<List<ToolDef>> IToolRegistry.SearchTopKAsync(string query, EmbeddingClient embedder, string? domain, int k, CancellationToken ct)
-        => SearchTopKAsync(query, embedder, domain, k, ct);
-
-    Task<List<ToolDef>> IToolRegistry.SearchTopKAsync(string query, EmbeddingClient embedder, string? domain, int k, float[]? queryEmbedding, CancellationToken ct)
-        => SearchTopKAsync(query, embedder, domain, k, queryEmbedding, ct);
-
-    void IToolRegistry.RecordCall(string toolName, bool success, long latencyMs)
-        => RecordCall(toolName, success, latencyMs);
-
-    IReadOnlyDictionary<string, ToolStats> IToolRegistry.GetAllStats() => GetAllStats();
-
-    ToolStats? IToolRegistry.GetStats(string toolName) => GetStats(toolName);
-
-    void IToolRegistry.ResetStats() => ResetStats();
-
-    IReadOnlyList<ToolDef> IToolRegistry.GetToolsByDomain(string domain) => GetToolsByDomain(domain);
-
-    void IToolRegistry.Clear() => Clear();
-
-    void IToolRegistry.ClearEmbeddings() => ClearEmbeddings();
+    private void ClearEmbeddingsInternal()
+    {
+        lock (_lock)
+        {
+            for (int i = 0; i < _tools.Count; i++)
+            {
+                var t = _tools[i];
+                if (t.Embedding.Length > 0)
+                    _tools[i] = t with { Embedding = Array.Empty<float>() };
+            }
+            _snapshot = _tools.ToArray();
+        }
+    }
 }
 
 /// <summary>
@@ -628,9 +633,6 @@ public sealed class ToolRetrievalMetrics
     private long _toolsCalled;
     private long _totalRounds;
 
-    // ═══════════════════════════════════════════
-    //  OpenTelemetry instruments
-    // ═══════════════════════════════════════════
     private static readonly Meter ToolMeter = new("LTAI.AI.ToolRetrieval");
     private static readonly Counter<long> MetricSearches = ToolMeter.CreateCounter<long>("ltai.tool.searches", "searches", "Total tool searches");
     private static readonly Counter<long> MetricFormatCorrect = ToolMeter.CreateCounter<long>("ltai.tool.format_correct", "calls", "Format-correct tool calls");

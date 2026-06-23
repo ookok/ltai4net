@@ -1,3 +1,4 @@
+using LTAI.Core.Configuration;
 using System.Text;
 using DocumentFormat.OpenXml.Packaging;
 using SS = DocumentFormat.OpenXml.Spreadsheet;
@@ -18,11 +19,7 @@ public static class OfficeDocumentReader
     {
         MaxCharactersInPart = 50_000_000,
     };
-    private static readonly Lazy<int> _maxOutputChars = new(() =>
-    {
-        var env = Environment.GetEnvironmentVariable("LTAI_OFFICE_MAX_OUTPUT_CHARS");
-        return int.TryParse(env, out var v) && v >= 1000 ? v : 100_000;
-    });
+    private static readonly Lazy<int> _maxOutputChars = new(() => EnvironmentConfig.OfficeMaxOutputChars);
     public static int MaxOutputChars => _maxOutputChars.Value;
 
     public static string? CheckFile(string path)

@@ -102,8 +102,21 @@ public async Task RefreshAsync(CancellationToken ct)
     public IReadOnlyCollection<ProviderInfo> Providers => _providers.Values.ToList().AsReadOnly();
     public IEnumerable<ProviderInfo> LlmProviders => _providers.Values.Where(p => p.IsLlmProvider);
 
+    /// <summary>Remote API providers — require API keys (non-empty EnvVars).</summary>
+    public IEnumerable<ProviderInfo> RemoteProviders =>
+        _providers.Values.Where(p => p.EnvVars is { Length: > 0 } && !string.IsNullOrEmpty(p.EnvVars[0]));
+
+    /// <summary>Edge/local providers — no API keys needed (empty EnvVars).</summary>
+    public IEnumerable<ProviderInfo> EdgeProviders =>
+        _providers.Values.Where(p => p.EnvVars is null or { Length: 0 } || string.IsNullOrEmpty(p.EnvVars[0]));
+
+    /// <summary>Active remote providers — LLM providers with configured API keys.</summary>
     public IEnumerable<ProviderInfo> ActiveProviders =>
         _providers.Values.Where(p => p.IsLlmProvider && p.EnvVars.Any(e => !string.IsNullOrEmpty(SecretManager.Get(e))));
+
+    /// <summary>Active edge providers — LLM edge providers (always "active", no keys needed).</summary>
+    public IEnumerable<ProviderInfo> ActiveEdgeProviders =>
+        EdgeProviders.Where(p => p.IsLlmProvider);
 
     public ProviderInfo? FindProvider(string id) =>
         _providers.TryGetValue(id, out var p) ? p : null;
@@ -212,7 +225,8 @@ public async Task RefreshAsync(CancellationToken ct)
         not null when npm.StartsWith("@ai-sdk/openai", StringComparison.OrdinalIgnoreCase) => ApiFormat.OpenAICompatible,
         not null when npm.StartsWith("@ai-sdk/anthropic", StringComparison.OrdinalIgnoreCase) => ApiFormat.Anthropic,
         not null when npm.StartsWith("@openrouter", StringComparison.OrdinalIgnoreCase) => ApiFormat.OpenAICompatible,
-        _ => string.IsNullOrEmpty(npm) ? ApiFormat.Unknown : ApiFormat.OpenAICompatible,
+        not null when npm.StartsWith("@ai-sdk/", StringComparison.OrdinalIgnoreCase) => ApiFormat.OpenAICompatible,
+        _ => ApiFormat.Unknown,
     };
 
     public static string DefaultEnvVar(string providerId) => providerId.ToUpperInvariant() switch

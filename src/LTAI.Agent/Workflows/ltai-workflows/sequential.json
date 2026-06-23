@@ -12,7 +12,7 @@
   "type": "sequential",
   "version": 1,
   "agents": [
-    "LTAI-Code",
+    "LTAI-Dev",
     "LTAI-Writer"
   ],
   "defaultTask": "Write a code snippet and then document it"

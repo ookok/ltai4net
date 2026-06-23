@@ -1,22 +1,21 @@
-using Microsoft.Extensions.Caching.Memory;
+using LTAI.Core.Caching;
 
 namespace LTAI.Core.Safety;
 
 internal static class VerdictCache
 {
-    private static readonly MemoryCache _cache = new(new MemoryCacheOptions
-    {
-        SizeLimit = 2000,
-        ExpirationScanFrequency = TimeSpan.FromSeconds(30)
-    });
-
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
+    private static readonly LTAICache<string, (bool safe, string reason)> _cache = new(
+        new LTAICacheOptions
+        {
+            MaxEntries = 2000,
+            DefaultTtl = TimeSpan.FromSeconds(60)
+        });
 
     public static (bool safe, string reason)? Get(string text, string direction = "")
     {
         if (text.Length > 500) return null;
         var key = direction.Length > 0 ? $"{direction}:{text}" : text;
-        if (_cache.TryGetValue(key, out (bool safe, string reason) cached))
+        if (_cache.TryGet(key, out var cached))
             return cached;
         return null;
     }
@@ -25,10 +24,6 @@ internal static class VerdictCache
     {
         if (text.Length > 500) return;
         var key = direction.Length > 0 ? $"{direction}:{text}" : text;
-        _cache.Set(key, (safe, reason), new MemoryCacheEntryOptions
-        {
-            AbsoluteExpirationRelativeToNow = CacheTtl,
-            Size = 1
-        });
+        _cache.Set(key, (safe, reason));
     }
 }

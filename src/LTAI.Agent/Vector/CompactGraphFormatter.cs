@@ -11,8 +11,11 @@
 // ═══════════════════════════════════════════════════════
 
 using System.Text;
+using LTAI.Core.Configuration;
 
 namespace LTAI.Agent.Vector;
+
+using BT = LTAI.Agent.Format.BabelTeleFormatter;
 
 public static class CompactGraphFormatter
 {
@@ -67,6 +70,53 @@ public static class CompactGraphFormatter
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// BabelTele mode: ultra-compact graph output (~50% token reduction over GCX1).
+    /// First use includes expansion header for self-explaining.
+    /// </summary>
+    public static string FormatBabelTele(string query, IEnumerable<NodeRow> nodes,
+        string? commonPrefix = null)
+    {
+        var sb = new StringBuilder();
+        var list = nodes.ToList();
+        BT.EncodeGraphResult(query, list.Count);
+
+        sb.Append(BT.ExpansionHeader());
+        sb.Append("## G ");
+        sb.Append(EncodeQuery(query));
+        sb.Append(" n");
+        sb.Append(list.Count);
+        sb.Append(' ');
+        var prefix = commonPrefix ?? FindCommonPrefix(list);
+        if (prefix.Length > 3)
+        {
+            sb.Append('@');
+            sb.Append(prefix.Length <= 30 ? prefix : "…" + prefix[^30..]);
+            sb.Append(' ');
+        }
+        foreach (var n in list)
+        {
+            var marker = n.Kind switch
+            {
+                "file" => 'f', "class" => 'c', "method" or "function" => 'm',
+                "namespace" or "module" => 'n', "variable" or "field" => 'v',
+                "interface" => 'i', "enum" => 'e', "struct" => 's',
+                _ => '?',
+            };
+            sb.Append(marker);
+            sb.Append(':');
+            sb.Append(n.Name);
+            sb.Append('@');
+            sb.Append(CompactPath(n.Source ?? "", prefix));
+            sb.Append(' ');
+        }
+
+        var result = sb.ToString().TrimEnd();
+        var naive = list.Sum(n => (n.Name.Length + (n.Source?.Length ?? 0)) / 3);
+        TokenSavingsTracker.RecordLookup(Math.Max(1, naive), Math.Max(1, result.Length / 3));
+        return result;
     }
 
     /// <summary>Estimate token count for a compact-formatted string.</summary>

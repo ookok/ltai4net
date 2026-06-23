@@ -52,7 +52,6 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(text.EditFile));
             tools.Add(AIFunctionFactory.Create(text.MultiEdit));
             var patchEdit = new PatchEditTool(ws);
-            // Wire dry-run impact analyzer from CgGraph when available
             var cg = sp.GetService<CgGraph>();
             if (cg != null)
             {
@@ -62,7 +61,7 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(patchEdit.ApplyPatches));
         }
         if (canRead) tools.Add(AIFunctionFactory.Create(TextTools.RegexTest));
-        if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Review" or "LTAI-Writer")
+        if (name.StartsWith("LTAI-Chat") || name is "LTAI-Dev" or "LTAI-QA" or "LTAI-Writer")
             tools.Add(AIFunctionFactory.Create(TextTools.DiffFiles));
     }
 
@@ -74,10 +73,9 @@ partial class AgentBuilder
         if (canRead) { tools.Add(AIFunctionFactory.Create(search.SearchContent)); tools.Add(AIFunctionFactory.Create(search.grep)); tools.Add(AIFunctionFactory.Create(search.SearchFiles)); }
         if (canRead && (yamlTools != null
             ? HasYamlTool(yamlTools, "symbols")
-            : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Frontend"))
+            : name.StartsWith("LTAI-Chat") || name is "LTAI-Dev"))
         { tools.Add(AIFunctionFactory.Create(codeAnalysis.GetSymbols)); tools.Add(AIFunctionFactory.Create(codeAnalysis.FindInCode)); }
 
-        // ── Compact code map (zap-inspired: token-efficient file outline) ──
         if (canRead)
         {
             System.Func<string, int, Task<string>> codeMapFn = (path, maxFiles) =>
@@ -86,7 +84,6 @@ partial class AgentBuilder
                 "Get a compact structural outline of a file or directory. Returns class/struct/interface/method/enum symbols with line numbers in a token-efficient format (~40% smaller than GetSymbols). Parameters: path (file or directory), maxFiles (1-50, default 20). Preferred over GetSymbols for quick overviews."));
         }
 
-        // ── Graph-powered tools (Gortex-inspired: impact, compact query, contracts) ──
         if (canRead)
         {
             var cg = sp.GetService<CgGraph>();
@@ -166,7 +163,7 @@ partial class AgentBuilder
     {
         if (yamlTools != null
             ? HasYamlTool(yamlTools, "diagram")
-            : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Data" or "LTAI-Writer" or "LTAI-Frontend")
+            : name.StartsWith("LTAI-Chat") || name is "LTAI-Dev" or "LTAI-Data" or "LTAI-Writer")
         {
             var diagram = new FlowchartTools(httpFactory);
             tools.Add(AIFunctionFactory.Create(diagram.Flowchart));
@@ -175,287 +172,6 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(diagram.GanttChart));
             tools.Add(AIFunctionFactory.Create(diagram.ErDiagram));
         }
-    }
-
-    static void RegisterChoiceAndSubagentTools(ToolSet tools, string name, IServiceProvider sp, IChatClient llm, string ws,
-        string[]? yamlTools)
-    {
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "subagent") || HasYamlTool(yamlTools, "choice")
-            : name is "LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")
-        {
-            var sub = new SubagentTools(sp, llm, ws, tools.ToList());
-        tools.Add(AIFunctionFactory.Create(sub.Explore));
-        tools.Add(AIFunctionFactory.Create(sub.Research));
-        tools.Add(AIFunctionFactory.Create(sub.Review));
-        tools.Add(AIFunctionFactory.Create(sub.SecurityReview));
-        tools.Add(AIFunctionFactory.Create(sub.DeepResearch));
-        tools.Add(AIFunctionFactory.Create(sub.SpawnSubagent));
-        }
-    }
-
-    static void RegisterGitTools(ToolSet tools, string name, string ws, string[]? yamlTools)
-    {
-        if (!(yamlTools != null
-            ? HasYamlTool(yamlTools, "git")
-            : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")) return;
-        var git = new GitTools(ws);
-        // Core read-only tools
-        tools.Add(AIFunctionFactory.Create(git.GitStatus));
-        tools.Add(AIFunctionFactory.Create(git.GitLog));
-        tools.Add(AIFunctionFactory.Create(git.GitDiff));
-        tools.Add(AIFunctionFactory.Create(git.GitBlame));
-        tools.Add(AIFunctionFactory.Create(git.GitShow));
-        // Branch management
-        tools.Add(AIFunctionFactory.Create(git.GitBranch));
-        tools.Add(AIFunctionFactory.Create(git.GitCheckout));
-        tools.Add(AIFunctionFactory.Create(git.GitBranchDelete));
-        // Commit workflow
-        tools.Add(AIFunctionFactory.Create(git.GitAdd));
-        tools.Add(AIFunctionFactory.Create(git.GitUnstage));
-        tools.Add(AIFunctionFactory.Create(git.GitCommitAndPush));
-        tools.Add(AIFunctionFactory.Create(git.GitUndoLast));
-        tools.Add(AIFunctionFactory.Create(git.GitReset));
-        // Advanced
-        tools.Add(AIFunctionFactory.Create(git.GitStash));
-        tools.Add(AIFunctionFactory.Create(git.GitMerge));
-        tools.Add(AIFunctionFactory.Create(git.GitRemote));
-    }
-
-    static void RegisterReviewTools(ToolSet tools, string name, string ws, PalaceStore? palaceStore = null,
-        IServiceProvider? sp = null, IChatClient? llm = null, IReadOnlyList<AITool>? allTools = null)
-    {
-        if (name is not ("LTAI-Chat" or "LTAI-Review" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Security" or "LTAI-Debug")) return;
-        var review = new ReviewTools(ws, palaceStore, sp, llm, allTools);
-        tools.Add(AIFunctionFactory.Create(review.LoadReviewRules));
-        tools.Add(AIFunctionFactory.Create(review.GroupChanges));
-        tools.Add(AIFunctionFactory.Create(review.MatchReviewRules));
-        tools.Add(AIFunctionFactory.Create(review.RepairReviewPositions));
-        tools.Add(AIFunctionFactory.Create(review.ReflectReviewQuality));
-        tools.Add(AIFunctionFactory.Create(review.BuildReviewContext));
-        tools.Add(AIFunctionFactory.Create(review.SaveAuditFindings));
-        tools.Add(AIFunctionFactory.Create(review.ResolveAuditFinding));
-        tools.Add(AIFunctionFactory.Create(review.VerifyAuditFinding));
-        tools.Add(AIFunctionFactory.Create(review.ListAuditFindings));
-        tools.Add(AIFunctionFactory.Create(review.GetAuditFinding));
-        tools.Add(AIFunctionFactory.Create(review.CloseAuditFinding));
-        tools.Add(AIFunctionFactory.Create(review.ExportAuditFindings));
-        tools.Add(AIFunctionFactory.Create(review.AuditStatistics));
-        tools.Add(AIFunctionFactory.Create(review.BatchResolveAuditFindings));
-        tools.Add(AIFunctionFactory.Create(review.BatchCloseAuditFindings));
-        tools.Add(AIFunctionFactory.Create(review.DeleteAuditFinding));
-        tools.Add(AIFunctionFactory.Create(review.FreezeAuditGates));
-        // ParallelReview — needs allTools for subagent filtering; only added when allTools is available
-        if (allTools != null)
-            tools.Add(AIFunctionFactory.Create(review.ParallelReview));
-    }
-
-    static void RegisterSkillBankTools(ToolSet tools, string name, string[]? yamlTools)
-    {
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "search")
-            : name is not ("LTAI-Code" or "LTAI-Frontend" or "LTAI-Chat")) return;
-        var skillBank = new SkillBank();
-        tools.Add(AIFunctionFactory.Create(
-            (string query, string? lang) =>
-            {
-                var results = skillBank.Search(query, lang, 5);
-                return results.Count > 0
-                    ? string.Join("\n---\n", results.Select(s => $"{s.Name} [{s.Category}] ({s.UseCount} uses, {s.SuccessRate:P0} success)\n{s.Pattern}"))
-                    : "(no matching skills found)";
-            },
-            "SkillBankSearch", "Search reusable code skills from past trajectories"));
-        tools.Add(AIFunctionFactory.Create(
-            (string name_, string pattern, string lang, string cat, string pre, string post) =>
-            {
-                skillBank.Register(name_, pattern, lang, cat, pre, post);
-                return $"Registered skill '{name_}' ({skillBank.Count} total)";
-            },
-            "SkillBankRegister", "Register a new code skill from a coding trajectory"));
-    }
-
-    static void RegisterLspTools(ToolSet tools, string name, string[]? yamlTools,
-        LanguageServer.LspLanguageManager lspManager)
-    {
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "symbols")
-            : !(name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Frontend")) return;
-        tools.Add(AIFunctionFactory.Create(async (string filePath, string content) =>
-        {
-            await lspManager.OpenFileAsync(filePath, content);
-            return $"LSP opened: {filePath}";
-        }, "LspOpenFile", "Open a file in its language server for real-time diagnostics"));
-        tools.Add(AIFunctionFactory.Create(() =>
-        {
-            var diags = lspManager.FormatDiagnostics();
-            return string.IsNullOrEmpty(diags) ? "(no LSP diagnostics)" : diags;
-        }, "LspGetDiagnostics", "Get current LSP diagnostics for open files"));
-    }
-
-    static void RegisterTaskTools(ToolSet tools, string name, string[]? yamlTools)
-    {
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "plan") || HasYamlTool(yamlTools, "task")
-            : !(name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend" or "LTAI-DCI")) return;
-        tools.Add(AIFunctionFactory.Create(TaskTools.TodoWrite));
-        tools.Add(AIFunctionFactory.Create(TaskTools.TodoComplete));
-        tools.Add(AIFunctionFactory.Create(TaskTools.TodoList));
-    }
-
-    static void RegisterIntegrationTools(ToolSet tools, string name, IHttpClientFactory httpFactory, string[]? yamlTools)
-    {
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "eia")
-            : name is not ("LTAI-Chat" or "LTAI-Data" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")) return;
-        var integ = new IntegrationTools(httpFactory);
-        tools.Add(AIFunctionFactory.Create(integ.Geocode));
-        tools.Add(AIFunctionFactory.Create(integ.ReverseGeocode));
-        tools.Add(AIFunctionFactory.Create(integ.PoiSearch));
-        tools.Add(AIFunctionFactory.Create(integ.DistanceCalc));
-        tools.Add(AIFunctionFactory.Create(integ.IpLocation));
-        tools.Add(AIFunctionFactory.Create(integ.Weather));
-        tools.Add(AIFunctionFactory.Create(integ.Translate));
-        tools.Add(AIFunctionFactory.Create(integ.ImageSearch));
-    }
-
-    static void RegisterSystemAndJobTools(ToolSet tools, string name, bool canExec, bool canRead, bool canWrite, string ws, IServiceProvider sp,
-        string[]? yamlTools)
-    {
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "system")
-            : name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Writer")
-        {
-            tools.Add(AIFunctionFactory.Create(SystemTools.date));
-            tools.Add(AIFunctionFactory.Create(SystemTools.uname));
-            tools.Add(AIFunctionFactory.Create(SystemTools.uptime));
-            tools.Add(AIFunctionFactory.Create(SystemTools.whoami));
-            tools.Add(AIFunctionFactory.Create(SystemTools.GetCurrentDateTime));
-            tools.Add(AIFunctionFactory.Create(SystemTools.SystemInfo));
-            tools.Add(AIFunctionFactory.Create(SystemTools.ListDirectory));
-            tools.Add(AIFunctionFactory.Create(SystemTools.ListProcesses));
-            tools.Add(AIFunctionFactory.Create(SystemTools.GetEnv));
-            tools.Add(AIFunctionFactory.Create(SystemTools.NetworkInterfaces));
-            tools.Add(AIFunctionFactory.Create(SystemTools.NetworkDiag));
-            tools.Add(AIFunctionFactory.Create(SystemTools.SetEnv));
-            tools.Add(AIFunctionFactory.Create(SystemTools.GetCurrentDirectory));
-        }
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "job")
-            : name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
-        {
-            var bgJobs = sp.GetRequiredService<BackgroundJobService>();
-            tools.Add(AIFunctionFactory.Create(bgJobs.StartJob));
-            tools.Add(AIFunctionFactory.Create(bgJobs.ListJobs));
-            tools.Add(AIFunctionFactory.Create(bgJobs.GetJobOutput));
-            tools.Add(AIFunctionFactory.Create(bgJobs.WaitForJob));
-            tools.Add(AIFunctionFactory.Create(bgJobs.StopJob));
-        }
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "task")
-            : name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Code" or "LTAI-Writer")
-        {
-            var tq = sp.GetRequiredService<TaskQueueTool>();
-            tools.Add(AIFunctionFactory.Create(tq.EnqueueTask));
-            tools.Add(AIFunctionFactory.Create(tq.ListTasks));
-            tools.Add(AIFunctionFactory.Create(tq.GetTask));
-            tools.Add(AIFunctionFactory.Create(tq.WaitForTask));
-            tools.Add(AIFunctionFactory.Create(tq.CancelTask));
-        }
-        if (canExec)
-        {
-            var sys = new SystemTools();
-            tools.Add(AIFunctionFactory.Create(sys.RunInContainer));
-            tools.Add(AIFunctionFactory.Create(sys.RunWithNetwork));
-            tools.Add(AIFunctionFactory.Create(sys.CheckDockerAsync));
-        }
-        if (canRead && canWrite && (yamlTools != null
-            ? HasYamlTool(yamlTools, "download")
-            : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend"))
-            tools.Add(AIFunctionFactory.Create(FileDownloadTool.DownloadFile));
-    }
-
-    static void RegisterWorkflowTools(ToolSet tools, string name, IServiceProvider sp, string[]? yamlTools)
-    {
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "workflow")
-            : name is not ("LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")) return;
-        var wfTools = new WorkflowTools(sp);
-        tools.Add(AIFunctionFactory.Create(wfTools.WorkflowHandoff));
-        tools.Add(AIFunctionFactory.Create(wfTools.WorkflowSequential));
-        tools.Add(AIFunctionFactory.Create(wfTools.WorkflowConcurrent));
-    }
-
-    static void RegisterClusterAndDeepenTools(ToolSet tools, string name, IServiceProvider sp)
-    {
-        if (name is not ("LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Writer" or "LTAI-Data")) return;
-        var cs = sp.GetRequiredService<ClusterSummarizer>();
-        tools.Add(AIFunctionFactory.Create(cs.SummarizeAsync));
-        var dst = sp.GetRequiredService<DeepenSearchTool>();
-        tools.Add(AIFunctionFactory.Create(dst.DeepenSearchAsync));
-    }
-
-    static void RegisterNewDomainTools(ToolSet tools, string name, bool canExec, bool canRead, bool canWrite, string ws, IServiceProvider sp,
-        string[]? yamlTools)
-    {
-        if (canExec)
-        {
-            var archive = new ArchiveTools(ws);
-            tools.Add(AIFunctionFactory.Create(archive.ArchiveCreate));
-            tools.Add(AIFunctionFactory.Create(archive.ArchiveExtract));
-        }
-        if (canRead && canWrite)
-        {
-            var mm = new MultimediaTools(ws);
-            tools.Add(AIFunctionFactory.Create(mm.ChartCreate));
-        }
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "data") || HasYamlTool(yamlTools, "database")
-            : name is "LTAI-Chat" or "LTAI-Data" or "LTAI-Code")
-        {
-            var db = new DatabaseTools();
-            tools.Add(AIFunctionFactory.Create(db.SqlQuery));
-        }
-        if (canRead && canWrite)
-        {
-            var dt = new DataTransformTools(ws);
-            tools.Add(AIFunctionFactory.Create(dt.JsonQuery));
-            tools.Add(AIFunctionFactory.Create(dt.CsvRead));
-            tools.Add(AIFunctionFactory.Create(dt.CsvWrite));
-        }
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "security")
-            : name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Security" or "LTAI-Writer")
-        { tools.Add(AIFunctionFactory.Create(CryptoTools.sha256sum)); tools.Add(AIFunctionFactory.Create(CryptoTools.md5sum)); tools.Add(AIFunctionFactory.Create(CryptoTools.HashFile)); tools.Add(AIFunctionFactory.Create(CryptoTools.EncryptFile)); tools.Add(AIFunctionFactory.Create(CryptoTools.DecryptFile)); }
-        if (canRead) { tools.Add(AIFunctionFactory.Create(CryptoTools.base64)); tools.Add(AIFunctionFactory.Create(CryptoTools.Base64Encode)); tools.Add(AIFunctionFactory.Create(CryptoTools.Base64Decode)); }
-        if (canRead) tools.Add(AIFunctionFactory.Create(MarkdownTools.RenderMarkdown));
-        if (yamlTools != null
-            ? HasYamlTool(yamlTools, "search")
-            : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Data" or "LTAI-Writer")
-        {
-            var rc = sp.GetRequiredService<RetrieveContentTool>();
-            tools.Add(AIFunctionFactory.Create(rc.RetrieveContent));
-        }
-    }
-
-    static void RegisterMemoryTools(ToolSet tools, bool canWrite, PalaceStore palaceStore, string ws, string[]? yamlTools)
-    {
-        if (!canWrite) return;
-        var palaceMemory = new MemoryTools(palaceStore, defaultWing: ws != null ? Path.GetFileName(ws.TrimEnd('/', '\\')) : "project");
-        tools.Add(AIFunctionFactory.Create(palaceMemory.Remember));
-        tools.Add(AIFunctionFactory.Create(palaceMemory.Forget));
-        tools.Add(AIFunctionFactory.Create(palaceMemory.RecallMemory));
-        tools.Add(AIFunctionFactory.Create(palaceMemory.ListMemories));
-    }
-
-    static void RegisterExploreTools(ToolSet tools, string name, string ws)
-    {
-        if (name != AgentNames.Explore) return;
-        var explore = new ExploreToolSet(ws);
-        tools.Add(AIFunctionFactory.Create(explore.ReadCite));
-        tools.Add(AIFunctionFactory.Create(explore.Glob));
-        tools.Add(AIFunctionFactory.Create(explore.SearchCompact));
-        tools.Add(AIFunctionFactory.Create(explore.ListDir));
-        tools.Add(AIFunctionFactory.Create(explore.Tree));
     }
 
     static void RegisterTextProcessingTools(ToolSet tools, string name, bool canRead, string ws)
@@ -472,71 +188,9 @@ partial class AgentBuilder
         tools.Add(AIFunctionFactory.Create(TextProcessingTools.df));
         tools.Add(AIFunctionFactory.Create(TextProcessingTools.seq));
 
-        // Project init tool (zap-inspired /init)
         var initService = new ProjectInitService(ws);
         System.Func<Task<string>> initFn = () => initService.InitAsync();
         tools.Add(AIFunctionFactory.Create(initFn, "InitProject",
             "One-click project initialization. Detects project type (dotnet/node/rust/python/go), creates LTAI.md context file, and returns build/test commands. Run once when starting on a new project."));
-    }
-
-    static void RegisterDebugTools(ToolSet tools, string name, IServiceProvider sp)
-    {
-        if (name is not ("LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-Code" or "LTAI-System")) return;
-        var debugBridge = sp.GetService<LTAI.Core.Debugging.IDebugBridge>();
-        if (debugBridge == null) return;
-        var debug = new DebugTools(debugBridge);
-        tools.Add(AIFunctionFactory.Create(debug.DebugStatus));
-        tools.Add(AIFunctionFactory.Create(debug.SetBreakpoint));
-        tools.Add(AIFunctionFactory.Create(debug.RemoveBreakpoint));
-        tools.Add(AIFunctionFactory.Create(debug.ListBreakpoints));
-        tools.Add(AIFunctionFactory.Create(debug.DebugContinue));
-        tools.Add(AIFunctionFactory.Create(debug.DebugStepOver));
-        tools.Add(AIFunctionFactory.Create(debug.DebugStepInto));
-        tools.Add(AIFunctionFactory.Create(debug.DebugStepOut));
-        tools.Add(AIFunctionFactory.Create(debug.DebugStop));
-        tools.Add(AIFunctionFactory.Create(debug.DebugGetStack));
-        tools.Add(AIFunctionFactory.Create(debug.DebugGetVariables));
-        tools.Add(AIFunctionFactory.Create(debug.DebugEvaluate));
-        tools.Add(AIFunctionFactory.Create(debug.DebugGetThreads));
-        tools.Add(AIFunctionFactory.Create(debug.DebugSwitchThread));
-        tools.Add(AIFunctionFactory.Create(debug.DebugAnalyzeFailure));
-    }
-
-    static void RegisterDelegationTools(ToolSet tools, string name, IServiceProvider sp)
-    {
-        if (name is not ("LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-Code" or "LTAI-System" or "LTAI-Writer")) return;
-        var del = new DelegationTools(sp.GetRequiredService<Delegation.DelegationContext>());
-        tools.Add(AIFunctionFactory.Create(del.EnqueueDelegationTask));
-        tools.Add(AIFunctionFactory.Create(del.ClaimNextTask));
-        tools.Add(AIFunctionFactory.Create(del.WriteVerifiedUpdate));
-        tools.Add(AIFunctionFactory.Create(del.ReadVerifiedContext));
-        tools.Add(AIFunctionFactory.Create(del.ListDelegationTasks));
-    }
-
-    static void RegisterSessionLineageTools(ToolSet tools, string name, IServiceProvider sp)
-    {
-        if (name is not ("LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-Code" or "LTAI-System" or "LTAI-Writer")) return;
-        var lt = new SessionLineageTools(sp.GetRequiredService<SessionManager>());
-        tools.Add(AIFunctionFactory.Create(lt.ForkSession));
-        tools.Add(AIFunctionFactory.Create(lt.MergeSessions));
-        tools.Add(AIFunctionFactory.Create(lt.SessionGraph));
-        tools.Add(AIFunctionFactory.Create(lt.ListChildSessions));
-    }
-
-    static void RegisterBuildAndPublishTools(ToolSet tools, string name, string ws, bool canExec)
-    {
-        if (name is not ("LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-Code" or "LTAI-DevOps" or "LTAI-Test")) return;
-        var build = new BuildTools(ws);
-        tools.Add(AIFunctionFactory.Create(build.BuildProject));
-        tools.Add(AIFunctionFactory.Create(build.BuildAndFix));
-        tools.Add(AIFunctionFactory.Create(BuildTools.DetectBuild));
-        tools.Add(AIFunctionFactory.Create(BuildTools.ParseBuildOutput));
-        if (name is "LTAI-DevOps" or "LTAI-Chat" or "LTAI-Chat-Pro")
-        {
-            var publish = new PublishTools(ws);
-            tools.Add(AIFunctionFactory.Create(publish.PublishProject));
-            tools.Add(AIFunctionFactory.Create(PublishTools.DetectPublish));
-            tools.Add(AIFunctionFactory.Create(PublishTools.ListPublished));
-        }
     }
 }

@@ -550,14 +550,36 @@ public sealed class SubagentTools
             if (DeniedTools.Any(d => name.Equals(d, StringComparison.OrdinalIgnoreCase)))
                 return false;
 
+            // Check [ToolPermission] attribute for declarative permission scoping
+            ToolPermission? declPerm = null;
+            if (t is AIFunction func && func.UnderlyingMethod != null)
+            {
+                var methodAttr = func.UnderlyingMethod.GetCustomAttribute<ToolPermissionAttribute>(false);
+                declPerm = methodAttr?.Required;
+                if (declPerm == null)
+                {
+                    var classAttr = func.UnderlyingMethod.DeclaringType?
+                        .GetCustomAttribute<ToolPermissionAttribute>(false);
+                    declPerm = classAttr?.Required;
+                }
+            }
+
             if (readOnly)
             {
-                // Check for [ReadOnlyTool] attribute on the underlying method
-                if (t is AIFunction func && func.UnderlyingMethod != null)
+                // [ReadOnlyTool] attribute — explicit safe-for-read-only marker
+                if (t is AIFunction roFunc && roFunc.UnderlyingMethod != null)
                 {
-                    return func.UnderlyingMethod.GetCustomAttribute<ReadOnlyToolAttribute>() != null;
+                    if (roFunc.UnderlyingMethod.GetCustomAttribute<ReadOnlyToolAttribute>() != null)
+                        return true;
                 }
-                return false; // unknown tool in read-only mode → deny
+                // [ToolPermission(Read)] — equally safe
+                if (declPerm == ToolPermission.Read)
+                    return true;
+                // [ToolPermission(Writes...)] — denied in read-only mode
+                if (declPerm != null)
+                    return false;
+                // Unknown tool → deny (safe default)
+                return false;
             }
             return true;
         }).ToList();

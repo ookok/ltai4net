@@ -24,6 +24,13 @@ public sealed record AgentFileDef
     /// <summary>WIP limit for this agent (0 = use global default).</summary>
     public int WipLimit { get; init; }
 
+    /// <summary>Agent version (semver).</summary>
+    public string? Version { get; init; }
+    /// <summary>Manifest URL or path for this agent's release artifact.</summary>
+    public string? Manifest { get; init; }
+    /// <summary>Style recipe names referenced by this agent (e.g. ["technical-blog", "release-note"]).</summary>
+    public string[] Recipes { get; init; } = [];
+
     /// <summary>Cached embedding vector for semantic routing.</summary>
     public float[]? Embedding { get; init; }
 
@@ -299,6 +306,9 @@ public sealed class AgentRegistry : IAgentRegistry
                 case "tools":         def = def with { Tools = ParseJsonArray(rawVal) ?? def.Tools }; break;
                 case "dod":           def = def with { DoD = val }; break;
                 case "wipLimit":      if (int.TryParse(val, out var w)) def = def with { WipLimit = w }; break;
+                case "version":       def = def with { Version = val }; break;
+                case "manifest":      def = def with { Manifest = val }; break;
+                case "recipes":       def = def with { Recipes = ParseJsonArray(rawVal) ?? def.Recipes }; break;
                 case "trigger":       def = def with { Trigger = ParseJsonArray(rawVal) ?? def.Trigger }; break;
                 case "tokenestimate":
                 case "token_estimate": if (int.TryParse(val, out var te)) def = def with { TokenEstimate = te }; break;

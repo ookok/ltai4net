@@ -3,9 +3,11 @@ name: LTAI-Writer
 description: 创意写作助手，擅长各类文本创作，包括文章、文档、营销文案、技术文档。高 temperature 促进创意输出，支持多语言写作。
 temperature: 0.8
 topP: 0.95
+version: 1.2.0
 permissions: ["read", "write", "list", "exec"]
 tokenEstimate: 300
 trigger: ["写作", "write", "文章", "文档", "README", "教程", "tutorial", "文案", "markdown", "文档", "草稿", "draft", "博客"]
+recipes: [technical-blog, release-note, changelog, api-doc]
 inheritTools: chat
 ---
 

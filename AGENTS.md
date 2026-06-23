@@ -26,6 +26,7 @@ dotnet run --project src\LTAI.Cli -- health  # CLI 健康检查
 - `src/LTAI.Core/` — 配置、安全、用量追踪（零外部依赖）
 - `src/LTAI.AI/` — LLM 路由器 (`MultiProviderChatClient`)、ProviderRegistry、ModelAutoSelector、嵌入 (`LocalEmbedder`)、ToolRegistry
 - `src/LTAI.Agent/` — agent 构建、编排、上下文、ToolSet、AgentToolStore、DevUI 服务、持久化
+- `src/LTAI.Agent/Format/` — BabelTele 紧凑编码（LLM 对 LLM 压缩格式）
 - `src/LTAI.Agent.CodeAnalysis/` — 代码分析（TreeSitter 解析器，语义代码搜索）
 - `src/LTAI.Agent.Database/` — 数据库工具
 - `src/LTAI.Agent.Documents/` — Office 文档工具
@@ -134,8 +135,8 @@ Layer 2: agents/*.agent.md (正文)        ← 领域专属工作流
   LoraAdapterStep → MemoryCachingStep(Restore) → RagContextStep
   → ProactiveSuggestStep → SafetyCheckStep → RouterStep
   → ToolExecutionStep → MemoryCachingStep(Save) → CompactionStep
-  → GrammarCheckStep → QualityGateStep → DoDCheckStep
-  → RetrospectiveStep
+  → GrammarCheckStep → AntiPatternCheckStep → QualityGateStep
+  → DoDCheckStep → RetrospectiveStep
 ```
 
 ### 阻断链
@@ -146,6 +147,7 @@ Layer 2: agents/*.agent.md (正文)        ← 领域专属工作流
 |------|---------|------|
 | `SafetyBlocked` | SafetyCheckStep | 跳过 RouterStep 及后续，返回安全拦截消息 |
 | `GrammarCheckBlocked` | GrammarCheckStep | 阻断新任务，`ChatAgent` 自动重试修复（上限 2 次） |
+| `AntiPatternBlocked` | AntiPatternCheckStep | 反模式检查未通过，注入修复指引 |
 | `QualityGateBlocked` | QualityGateStep | 质量门禁未通过，触发重新生成 |
 | `DoDBlocked` | DoDCheckStep | 完成定义检查失败（含 TODO/FIXME/{{}}模板残留） |
 
@@ -161,6 +163,16 @@ services.AddSingleton<PipelineRunner>();
 ```
 
 `PipelineRunner` 从 DI 解析所有已注册的 `IPipelineStep`，未注册步骤自动跳过。`ChatAgent` 通过 `PipelineRunner.RunPostGenerationAsync()` 统一执行后处理管线（MemoryCachingSave → Compaction → GrammarCheck → QualityGate → DoDCheck → Retrospective），替代了之前 3 处内联 `new GrammarCheckStep(...)` 的调用方式。
+
+### CompactionStep 集成上下文卸载
+
+`CompactionStep` 在上下文超过 75% 阈值时自动触发 **TencentDB-Agent-Memory 风格上下文卸载**：
+
+1. **Phase A — Offload**：重工具结果（>1KB/>40 行）写入 `.livingtree/refs/*.md`，替换为 `[refs/{file}#{hash}]`
+2. **Phase B — 压缩**：原有 TieredCompressor 继续压缩消息
+3. **Phase C — Mermaid 注入**：注入 `stateDiagram-v2` + 紧凑状态摘要到上下文
+
+卸载后通过 `[refs/{file}#{hash}]` → refs/index.md → 完整文件 可无损恢复原始内容。
 
 ## AgentContextProviderBuilder 实际顺序
 
@@ -370,7 +382,7 @@ TUI: /impact <symbol>     # 分析修改该符号的影响范围
 
 `Glove50Embedder`（`src/LTAI.AI/Glove50Embedder.cs`）提供 50 维语义嵌入，无 ONNX 依赖，零下载。内置 ~400 个代码相关词向量 + hash OOV fallback。注册为 `EmbeddingClient` 的 fallback 层（ONNX → Remote API → GloVe-50d → BM25 FastEmb）。
 
-可选下载真实 GloVe-50d 词表（`models/glove50d.gv50`，~2MB），自动从 `mogoo.com.cn/glove/` 下载：
+可选下载真实 GloVe-50d 词表（`models/glove50d.gv50`，~2MB），自动从 GitHub Releases 下载：
 ```bash
 ./scripts/generate-glove50.ps1
 ```
@@ -426,6 +438,56 @@ Agent: FindCrossRepoContracts  # 跨仓库查询
 
 `Long2ShortTracker`（`src/LTAI.Agent/Tools/Long2ShortTracker.cs`）追踪每个工具的 token 效率。零和 brevity 奖励：同等质量下的较短输出获得更高评分。
 
+## 多维质量门禁（garden-skills Critique 启发）
+
+`QualityGateStep`（`src/LTAI.Agent/Pipeline/Steps/QualityGateStep.cs`）使用 5 维度评分替代单一分数：
+
+| 维度 | 说明 | 评分范围 |
+|------|------|---------|
+| 哲学一致 | agent 定位与用户意图对齐度 | 0-10 |
+| 内容完整 | 是否覆盖任务所有需求 | 0-10 |
+| 清晰结构 | 分段、标题、可读性 | 0-10 |
+| 工艺质量 | 反 AI 俗套、无模板残留、无 TODO | 0-10 |
+| 工具使用 | 工具调用适当性 | 0-10 |
+
+Pipeline 阻断时输出各维度分数供 LLM 自动修复。
+
+## AntiPatternCheckStep（反模式检查）
+
+`AntiPatternCheckStep`（`src/LTAI.Agent/Pipeline/Steps/AntiPatternCheckStep.cs`）在 GrammarCheck 之后、QualityGate 之前运行。扫描三类反模式：
+
+- **文本俗套**：AI 开场白 (`Let me`/`我来`)、emoji 滥用、过度客套、紫粉渐变、模板残留
+- **代码反模式**：React `const styles = {...}` 全局污染、`scrollIntoView`、CSS 剪影替代真实产品图、合并冲突标记
+- **安全模式**：硬编码 API Key (`sk-`/`ghp_`/`AIza`)、硬编码 secret、`localhost` URL
+
+阻断管线时注入详细修复指引。
+
+## 风格配方系统
+
+`recipes/` 目录提供可复用的写作风格配方（garden-skills style-recipes 启发）：
+
+| 配方 | 最佳用途 |
+|------|---------|
+| `technical-blog.recipe.md` | 技术博客、教程 |
+| `release-note.recipe.md` | 版本发布说明 |
+| `changelog.recipe.md` | 多版本变更日志 |
+| `api-doc.recipe.md` | API 参考文档 |
+| `incident-report.recipe.md` | 事故复盘 |
+
+Agent 通过 YAML front-matter `recipes: [technical-blog, release-note]` 声明所用配方。配方热加载（与 agent 定义相同的 FileSystemWatcher 机制）。
+
+## Agent 版本化与 Manifest
+
+Agent YAML front-matter 新增三个字段：
+
+```yaml
+version: 1.0.0              # semver 版本号
+manifest: https://...        # 发布产物地址
+recipes: [technical-blog]    # 引用风格配方
+```
+
+同 `agents/*.agent.md` 热重载机制，修改后自动更新。
+
 ## 工具 Agent 工具
 
 以下工具通过 `Builder.Tools.cs` 自动注册到 chat/code/review 等 agent：
@@ -437,6 +499,79 @@ Agent: FindCrossRepoContracts  # 跨仓库查询
 | 跨仓库合约 | `ListContracts` | `ContractRegistry` |
 | 跨仓库合约查找 | `FindCrossRepoContracts` | `ContractRegistry` |
 | 预览编辑 | `ApplyPatches dryRun=true` | `PatchEditTool` |
+
+## 上下文卸载系统（TencentDB-Agent-Memory 启发）
+
+`ContextOffloader`（`src/LTAI.Agent/Memory/ContextOffloader.cs`）+ `MermaidStateTracker`（`src/LTAI.Agent/Memory/MermaidStateTracker.cs`）实现 Mermaid Symbolic Memory + Context Offload 范式：
+
+| 组件 | 文件 | 说明 |
+|------|------|------|
+| `ContextOffloader` | `Memory/ContextOffloader.cs` | 将重工具结果卸载到 `refs/*.md`，替换为 `[refs/{file}#{hash}]` 引用 |
+| `MermaidStateTracker` | `Memory/MermaidStateTracker.cs` | 构建 `stateDiagram-v2` 状态图，带 clickable node_id 引用 |
+| `CompactionStep` | `Pipeline/Steps/CompactionStep.cs` | 压缩前自动卸载 → Mermaid 图注入 |
+
+**工作流：**
+1. 上下文超过 75% 阈值时触发
+2. 重工具结果（>2KB 或 >40 行）自动卸载到 `.livingtree/refs/{traceId}-{seq}-{tool}.md`
+3. 工具结果替换为 `[refs/{file}#{hash}]`（含 SHA256 前 12 字符校验）
+4. `MermaidStateTracker` 构建 `stateDiagram-v2`，每个节点含 clickable refs 链接
+5. 生成 `{traceId}-index.md` 索引文件作为中间层
+6. 压缩后的消息 + Mermaid 图 + 紧凑状态摘要替换原始上下文
+
+**钻取路径（损失less traceability）：**
+```
+Mermaid 图（上下文中）→ refs/index.md（中间索引）→ refs/{traceId}-*.md（完整内容）
+```
+
+**预期效果：** 61% token 减少（TencentDB 报告），白盒可调试性。
+
+### ContextOffloader 阈值
+
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `MaxInlineBytes` | 1024 | 超过 1KB 自动卸载 |
+| `MaxInlineLines` | 40 | 超过 40 行自动卸载 |
+| `MaxInlineChars` | 2048 | 超过 2K 字符自动卸载 |
+
+### 注册
+
+```csharp
+services.AddSingleton<ContextOffloader>();
+services.AddSingleton<MermaidStateTracker>();
+```
+
+## L2/L3 语义金字塔（PalaceStore）
+
+`PalaceStore`（`src/LTAI.Agent/Memory/PalaceStore.cs`）新增 TencentDB-Agent-Memory 启发的语义金字塔，将记忆组织为四层：
+
+| 层 | 名称 | 存储 | 方法 |
+|----|------|------|------|
+| L0 | 原始会话 | `palace` 表（role=user/assistant） | `StoreAsync` |
+| L1 | 原子事实 | `reflection` room | `MemoryRefinery` |
+| L2 | 场景块 | 动态分组（entity overlap + time proximity） | `BuildScenarioBlocksAsync(wing)` |
+| L3 | 人物画像 | 从场景提取 expertise/themes | `ExtractPersonaAsync(wing)` |
+
+### 场景分组策略（`BuildScenarioBlocksAsync`）
+
+两个 L1 事实属于同一场景块当：
+1. **实体重叠**：共享 ≥1 个大写命名实体
+2. **时间接近**：创建时间差 < 5 分钟
+3. **嵌入相似度**：cosine similarity > 0.7（预留，当前使用实体+时间）
+
+### 人物画像提取（`ExtractPersonaAsync`）
+
+从 L2 场景块提取：
+- **Expertise**：出现频次最高的实体（capabilities）
+- **Themes**：场景主题去重列表
+- **Metrics**：平均重要性、总 facts 数、最后活跃时间
+
+### 白盒 Markdown 导出
+
+```csharp
+var l2Markdown = await palace.ExportL2ToMarkdownAsync("coding");
+var l3Markdown = await palace.ExportL3ToMarkdownAsync("coding");
+// 结果写入 .livingtree/refs/ 供调试查看
+```
 
 ## 参考文档
 
@@ -506,3 +641,63 @@ Agent: FindCrossRepoContracts  # 跨仓库查询
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `LTAI_GREETING_MAX_LENGTH` | 15 | QueryClassifier 问候判定最大字符数 |
+
+## BabelTele 紧凑编码
+
+`BabelTeleFormatter`（`src/LTAI.Agent/Format/BabelTeleFormatter.cs`）实现 arXiv:2606.19857 启发的 LLM 对 LLM 紧凑编码。牺牲人类可读性换取 token 效率，通过自解释 pattern 让 LLM 首次遇到时理解格式。
+
+**5 种类型标记：**
+
+| 标记 | 示例 | 说明 |
+|------|------|------|
+| `[T:tool#N]` | `[T:ReadFileContent#1] /src/foo.cs L42` | 工具结果 + 首行摘要 |
+| `[G:q n=N]` | `[G:searchSymbol n=5 f:c@~src/a.cs]` | 图查询结果 + 节点编码行 |
+| `[S:p m=N f:Ln]` | `[S:main m=12 src/bar.cs:L5]` | 搜索结果 + 匹配数 + 首文件 |
+| `[R:path#Ln]` | `[R:src/a.cs#L42 r=0.85]` | 文件引用 + 行号 + 相关度 |
+| `[E:code Ln:c]` | `[E:CS1001 L5:10 缺少标识符]` | 编译/语法错误 |
+
+每种类型首次出现在 context 窗口时附带展开说明，后续仅用 ~40 字符的紧凑引用。`TokenSavingsTracker` 自动计算节省的 token。
+
+### 集成点
+
+- **`CompactGraphFormatter.FormatBabelTele()`** — 图结果 ~50% token 减少（对比 JSON）
+- **`ContextOffloader.OffloadToolCallsAsync()`** — 工具结果卸载生成 `[T:tool#seq] 摘要 [refs/{file}#{hash}]` 双格式
+- **`BabelTeleFormatter.ResetForContext()`** — 新会话开始时调用，重置自解释状态
+
+## GateMem 记忆治理
+
+受 arXiv:2606.18829 GateMem 基准启发，在多用户共享记忆场景中实现三个维度：Utility、Access Control、Forgetting。
+
+### 访问控制模型
+
+每个 `MemoryFact` / PalaceStore drawer 有三个 scope 级别：
+
+| Scope | 可见性 | 说明 |
+|-------|--------|------|
+| `shared` | 所有用户 | 默认，全员可见 |
+| `private` | 仅创建者（principal）| 其他用户查询不到 |
+| `role:*` | 特定角色 | 预留，按角色过滤 |
+
+### 遗忘机制
+
+```csharp
+// 精确删除
+await store.ForgetAsync(new MemoryForgetRequest(FactId: "abc123"));
+
+// 按用户批量删除
+await store.ForgetAsync(new MemoryForgetRequest(Principal: "user1"));
+
+// 按 room 批量删除
+await store.ForgetAsync(new MemoryForgetRequest(Room: "secret"));
+
+// 自动过期清理（后台调用）
+await store.PurgeExpiredAsync();
+```
+
+### 实现
+
+- `IMemoryStore` 接口新增 `ForgetAsync` + `PurgeExpiredAsync`
+- `PalaceStore` SQL schema 增加 `principal`/`scope` 列 + 索引
+- `HybridSearchAsync` SQL 级 scope 过滤：`(scope='shared' OR (scope='private' AND principal=@p))`
+- `MemoryAuthorityProvider` 注入访问控制 + 遗忘规则到 AI context
+- `MemoryStore.SearchFactsAsync` 按 `MemoryFilter.Principal`/`Scope` 自动过滤

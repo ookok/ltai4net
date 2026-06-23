@@ -19,8 +19,10 @@ public static class KgStoreSchema
         "extends", "depends_on", "related_to", "uses", "mentions",
         "causes", "fixes", "contradicts", "supports", "follows",
         "replaces", "tracked_in", "part_of", "created_by",
-        "refines",
-        "refutes",
+        "refines", "refutes",
+        // Disco-RAG rhetorical relations
+        "elaborates", "contrasts_with", "causes_effect",
+        "supports_claim", "provides_background",
     };
 
     public static bool IsValidKind(string kind) => string.IsNullOrEmpty(kind) || ValidKinds.Contains(kind);

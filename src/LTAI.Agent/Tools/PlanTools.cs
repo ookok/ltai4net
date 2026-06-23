@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
@@ -9,19 +8,11 @@ namespace LTAI.Agent.Tools;
 
 public static class PlanTools
 {
-    /// <summary>Bounded plan state store. Set during DI init; defaults to in-process static.</summary>
+    /// <summary>Bounded plan state store. Set during DI init.</summary>
     public static PlanStore? Store { get; set; }
 
-    // F1: Per-session plan isolation using ConcurrentDictionary + AsyncLocal.
-    // Replaced by PlanStore DI singleton when available.
-    private static readonly ConcurrentDictionary<string, PlanState> _legacyPlans = new();
-    private static readonly AsyncLocal<string?> _sessionId = new();
-    private static readonly TimeSpan PlanTimeout = TimeSpan.FromMinutes(30);
-    private static DateTime _lastLegacyCleanup = DateTime.UtcNow;
-    private static readonly TimeSpan LegacyCleanupInterval = TimeSpan.FromMinutes(10);
-
     /// <summary>Set by ChatAgent before invoking plan tools, scoping PlanState to a session.</summary>
-    public static string? SessionId { get => _sessionId.Value; set => _sessionId.Value = value; }
+    public static string? SessionId { get; set; }
 
     /// <summary>
     /// Optional ExecutionEngine for plan execution. Set during DI initialization.
@@ -31,47 +22,26 @@ public static class PlanTools
 
     private static string SessionKey => SessionId ?? "default";
 
-    private static bool UseStore => Store != null;
-
     private static string PlanStateKey(string session) => $"plan:{session}";
 
     private static string ExecPlanKey(string session) => $"exec:{session}";
 
     private static PlanState? CurrentPlan
     {
-        get
-        {
-            if (UseStore)
-                return Store!.TryGet<PlanState>(PlanStateKey(SessionKey), out var p) ? p : null;
-            return _legacyPlans.TryGetValue(SessionKey, out var p2) ? p2 : null;
-        }
+        get => Store!.TryGet<PlanState>(PlanStateKey(SessionKey), out var p) ? p : null;
         set
         {
-            if (UseStore)
-            {
-                if (value != null) Store!.Set(PlanStateKey(SessionKey), value);
-                else Store!.Remove(PlanStateKey(SessionKey));
-            }
-            else
-            {
-                if (value != null) _legacyPlans[SessionKey] = value;
-                else _legacyPlans.TryRemove(SessionKey, out _);
-            }
+            if (value != null) Store!.Set(PlanStateKey(SessionKey), value);
+            else Store!.Remove(PlanStateKey(SessionKey));
         }
     }
 
     private static Execution.ExecutionPlan? CurrentExecPlan
     {
-        get
-        {
-            if (UseStore)
-                return Store!.TryGet<Execution.ExecutionPlan>(ExecPlanKey(SessionKey), out var p) ? p : null;
-            return null; // legacy: stored in _executionPlan field (removed)
-        }
+        get => Store!.TryGet<Execution.ExecutionPlan>(ExecPlanKey(SessionKey), out var p) ? p : null;
         set
         {
-            if (UseStore && value != null)
-                Store!.Set(ExecPlanKey(SessionKey), value);
+            if (value != null) Store!.Set(ExecPlanKey(SessionKey), value);
         }
     }
 
@@ -86,7 +56,7 @@ public static class PlanTools
 
     private static bool IsExpired(PlanState? plan) =>
         plan is { Status: "proposed" or "approved" or "executing" }
-        && DateTime.UtcNow - plan.CreatedAt > PlanTimeout;
+        && DateTime.UtcNow - plan.CreatedAt > TimeSpan.FromMinutes(30);
 
     private static string? ExpiredGuard(PlanState? plan)
     {
@@ -143,7 +113,6 @@ public static class PlanTools
             }
             catch (Exception ex)
             {
-                // Non-fatal: execution plan is best-effort, fall back to manual plan
                 System.Diagnostics.Debug.WriteLine($"PlanTools: ExecutionEngine planning failed: {ex.Message}");
             }
         }
@@ -182,7 +151,6 @@ public static class PlanTools
         var step = plan.Steps.FirstOrDefault(s => s.Id == stepId);
         if (step == null) return $"Step '{stepId}' not found in plan";
 
-        // F3: Check acceptance criteria if defined
         if (!string.IsNullOrWhiteSpace(step.Acceptance))
         {
             var acceptanceCheck = VerifyAcceptance(step.Acceptance, result, notes);
@@ -190,7 +158,7 @@ public static class PlanTools
                 return $"⚠️ Step '{step.Title}' acceptance criteria not fully met:\n" +
                        $"  Criteria: {step.Acceptance}\n" +
                        $"  Issue: {acceptanceCheck.Reason}\n\n" +
-                       $"Submit the result again with stronger evidence, or use RevisePlan to adjust the criteria.";
+                       "Submit the result again with stronger evidence, or use RevisePlan to adjust the criteria.";
         }
 
         var nextIdx = Array.IndexOf(plan.Steps, step) + 1;
@@ -207,12 +175,10 @@ public static class PlanTools
 
     private static (bool IsMet, string Reason) VerifyAcceptance(string criteria, string result, string? notes)
     {
-        // Multi-layer acceptance verification: keywords + negation + semantic coverage
         var combined = $"{result} {notes ?? ""}";
         var lowerCriteria = criteria.ToLowerInvariant();
         var lowerCombined = combined.ToLowerInvariant();
 
-        // Layer 1: Check for explicit negation patterns
         var negationChecks = new (string Pattern, string Hint)[]
         {
             ("no error", "Result does not confirm 'no errors'"),
@@ -234,7 +200,6 @@ public static class PlanTools
             }
         }
 
-        // Layer 2: Check required semantic keywords (key nouns and verbs from criteria)
         var stopwords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "and", "the", "that", "this", "with", "must", "should", "after", "for", "but",
@@ -261,13 +226,11 @@ public static class PlanTools
             }
             if (missing.Count > 0)
             {
-                // Partial match: warn but don't block
                 return (true,
                     $"Note: criteria mentions '{string.Join(", ", missing)}' but result doesn't explicitly reference it.");
             }
         }
 
-        // Layer 3: Length/quality check — result should be reasonably detailed
         if (result.Length < criteria.Length * 0.3 && criteria.Length > 30)
         {
             return (false,
@@ -327,7 +290,6 @@ public static class PlanTools
         if (plan.Status != "proposed") return "Plan already " + plan.Status;
         CurrentPlan = plan with { Status = "approved" };
 
-        // Trigger ExecutionEngine execution if available
         var execPlan = CurrentExecPlan;
         if (ExecutionEngine != null && execPlan != null)
         {
@@ -362,7 +324,6 @@ public static class PlanTools
         CurrentPlan = plan with { Status = "executing" };
         var first = CurrentPlan!.Steps[0];
 
-        // Notify ExecutionEngine that execution has started
         var execPlan = CurrentExecPlan;
         if (ExecutionEngine != null && execPlan != null)
         {
@@ -383,27 +344,12 @@ public static class PlanTools
         {
             await ExecutionEngine!.ExecuteAsync(execPlan).ConfigureAwait(false);
         }
-        catch { /* background execution error — plan continues manually */ }
+        catch { }
     }
 
     /// <summary>Periodically evict stale session plans. Called by ChatAgent.</summary>
     public static void EvictStaleSessions()
     {
-        if (UseStore)
-        {
-            Store!.EvictStaleSessions();
-            return;
-        }
-        var now = DateTime.UtcNow;
-        if ((now - _lastLegacyCleanup) < LegacyCleanupInterval) return;
-        _lastLegacyCleanup = now;
-        foreach (var key in _legacyPlans.Keys.ToArray())
-        {
-            if (_legacyPlans.TryGetValue(key, out var plan)
-                && (now - plan.CreatedAt) > TimeSpan.FromHours(2))
-            {
-                _legacyPlans.TryRemove(key, out _);
-            }
-        }
+        Store?.EvictStaleSessions();
     }
 }

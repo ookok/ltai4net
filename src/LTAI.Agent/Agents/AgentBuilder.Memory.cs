@@ -47,7 +47,8 @@ partial class AgentBuilder
 
     internal static PalaceStore BuildPalaceStore(EmbeddingClient embedder, LTAIOptions opts, ILoggerFactory loggerFactory)
     {
-        var palaceDb = Path.Combine(opts.DataDirectory, "palace.db");
+        // Use kg.db as the shared palace store (was palace.db before Phase 1.1)
+        var palaceDb = opts.ResolveDataPath("kg.db");
         WingClassifier.LlmClassifier = (text) => null;
         return new PalaceStore(embedder, palaceDb,
             loggerFactory.CreateLogger<PalaceStore>());

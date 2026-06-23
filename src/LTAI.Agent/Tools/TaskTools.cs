@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
@@ -13,48 +12,24 @@ namespace LTAI.Agent.Tools;
 [ToolDomain("task")]
 public static class TaskTools
 {
-    /// <summary>Bounded todo store. Set during DI init; defaults to in-process static.</summary>
+    /// <summary>Bounded todo store. Set during DI init.</summary>
     public static TaskStore? Store { get; set; }
-
-    // Legacy fallback when Store is not set
-    private static readonly ConcurrentDictionary<string, SessionTodoList> _legacyTodos = new(StringComparer.Ordinal);
-    private static readonly AsyncLocal<string?> _sessionId = new();
-    private static DateTime _lastLegacyCleanup = DateTime.UtcNow;
-    private static readonly TimeSpan LegacyCleanupInterval = TimeSpan.FromMinutes(15);
 
     /// <summary>Periodically evict stale session todo lists. Called by ChatAgent.</summary>
     public static void EvictStaleSessions()
     {
-        if (Store != null)
-        {
-            Store.EvictStaleSessions();
-            return;
-        }
-        var now = DateTime.UtcNow;
-        if ((now - _lastLegacyCleanup) < LegacyCleanupInterval) return;
-        _lastLegacyCleanup = now;
-        foreach (var key in _legacyTodos.Keys.ToArray())
-        {
-            if (_legacyTodos.TryGetValue(key, out var list)
-                && list.Items.Count == 0
-                && (now - list.LastModified) > TimeSpan.FromHours(1))
-            {
-                _legacyTodos.TryRemove(key, out _);
-            }
-        }
+        Store?.EvictStaleSessions();
     }
 
     /// <summary>Set by ChatAgent before tool calls, scoping todos to a session.</summary>
-    public static string? SessionId { get => _sessionId.Value; set => _sessionId.Value = value; }
+    public static string? SessionId { get; set; }
 
     private static SessionTodoList CurrentList
     {
         get
         {
             var sid = SessionId ?? "default";
-            if (Store != null)
-                return Store.GetOrAdd(sid, static () => new SessionTodoList());
-            return _legacyTodos.GetOrAdd(sid, _ => new SessionTodoList());
+            return Store!.GetOrAdd(sid, static () => new SessionTodoList());
         }
     }
 
@@ -157,10 +132,7 @@ public static class TaskTools
     public static void ClearCurrentSession()
     {
         var sid = SessionId ?? "default";
-        if (Store != null)
-            Store.Remove(sid);
-        else
-            _legacyTodos.TryRemove(sid, out _);
+        Store?.Remove(sid);
     }
 
     /// <summary>Get remaining todo count for current session (used by AgentModeObserver).</summary>

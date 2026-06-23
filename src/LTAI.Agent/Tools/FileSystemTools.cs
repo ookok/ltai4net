@@ -170,6 +170,7 @@ public sealed class FileSystemTools
             await _writeBuf.WriteAsync(fp, content).ConfigureAwait(false);
             var isNew = !File.Exists(fp);
             EditLedger.Default.RecordEdit(fp, isNew);
+            await RecordDeltaIfAvailable(fp, content, isNew).ConfigureAwait(false);
             return $"Written {content.Length} bytes to {Path.GetFileName(fp)}";
         }
 
@@ -182,13 +183,11 @@ public sealed class FileSystemTools
             var isNew = !File.Exists(fp);
             File.Move(tmp, fp, overwrite: true);
             EditLedger.Default.RecordEdit(fp, isNew);
+            await RecordDeltaIfAvailable(fp, content, isNew).ConfigureAwait(false);
         }
         catch
         {
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch
-            {
-                // non-critical, best-effort
-            }
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
             throw;
         }
         return $"Written {content.Length} bytes to {Path.GetFileName(fp)}";
@@ -212,6 +211,30 @@ public sealed class FileSystemTools
 
     [Description("列出当前可用的所有工具及其用途说明。")]
     public string ListTools() => "Use the specific tool you need. Available domains: filesystem (read/write/list/copy/move/delete/search), text (edit/regex/diff), documents (word/excel/ppt/pdf), web, data, git, system, code analysis, multimedia, and more.";
+
+    // ═══════════════════════════════════════════════════════
+    //  DeltaStore integration
+    // ═══════════════════════════════════════════════════════
+
+    private static Delta.DeltaStore? s_deltaStore;
+
+    public static void SetDeltaStore(Delta.DeltaStore? store) => s_deltaStore = store;
+
+    private static async Task RecordDeltaIfAvailable(string filePath, string content, bool isNew,
+        [System.Runtime.CompilerServices.CallerMemberName] string toolName = "")
+    {
+        if (s_deltaStore == null) return;
+        try
+        {
+            var lines = content.Split('\n');
+            await s_deltaStore.CreateDeltaForEditAsync(
+                filePath, startLine: 1, endLine: lines.Length,
+                diffContent: null, toolName: toolName,
+                conversationId: "filesystem", messageId: Guid.NewGuid().ToString("N"),
+                agentId: "FileSystemTools", isNewFile: isNew).ConfigureAwait(false);
+        }
+        catch { }
+    }
 
     // ═══════════════════════════════════════════════════════
     //  coreutils-style aliases — well-known names for LLM

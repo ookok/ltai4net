@@ -40,7 +40,7 @@ public static partial class ServiceCollectionExtensions
             chat = new ExpertRouterAgent(chat, expertRouter, expertFanOut, expertAggregator, expertRegistry,
                 sp.GetService<ExpertFeedbackLogger>());
 
-            var proAgent = all.TryGetValue(AgentNames.ChatPro, out var p) ? p : chat;
+            var proAgent = all.TryGetValue(AgentNames.Chat, out var p) ? p : chat;
             var budget = sp.GetService<BudgetTracker>();
 
             var l1Cfg = sp.GetRequiredService<IOptions<LTAIOptions>>().Value.AI.L1;

@@ -6,6 +6,7 @@ using LTAI.Agent.Caching;
 namespace LTAI.Agent.Tools;
 
 [ToolDomain("explore")]
+[ToolPermission(ToolPermission.Read)]
 public sealed class ExploreToolSet
 {
     private readonly FileSystemTools _fs;

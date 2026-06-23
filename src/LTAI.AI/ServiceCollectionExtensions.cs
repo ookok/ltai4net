@@ -1,9 +1,12 @@
+using LTAI.Core.Caching;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using _Cff = LTAI.Core.Caching.LTAICacheFactory;
+using _Cop = LTAI.Core.Caching.LTAICacheOptions;
 
 namespace LTAI.AI;
 
@@ -18,9 +21,9 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient("llm")
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
             {
-                MaxConnectionsPerServer = int.TryParse(Environment.GetEnvironmentVariable("LTAI_HTTP_MAX_CONN"), out var mc) ? Math.Max(2, mc) : 6,
+                MaxConnectionsPerServer = EnvironmentConfig.HttpMaxConn,
                 PooledConnectionLifetime = TimeSpan.FromMinutes(
-                    int.TryParse(Environment.GetEnvironmentVariable("LTAI_HTTP_POOL_LIFETIME_MIN"), out var pl) ? Math.Max(1, pl) : 10),
+                    EnvironmentConfig.HttpPoolLifetimeMin),
                 PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
                 EnableMultipleHttp2Connections = true,
                 AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
@@ -34,13 +37,13 @@ public static class ServiceCollectionExtensions
             var logger = sp.GetRequiredService<ILogger<ProviderRegistry>>();
             var registry = new ProviderRegistry(client, logger);
             registry.Initialize();
-            UsageTracker.s_priceResolver = modelId =>
+            UsageTracker.Default.SetPriceResolver(modelId =>
             {
                 var model = registry.FindModel(modelId);
                 if (model == null) return null;
                 var rate = 7.2m;
                 return (model.PriceInPerM * rate, model.PriceOutPerM * rate, model.PriceInPerM * rate * 0.1m);
-            };
+            });
             client.StartBackgroundRefresh();
             return registry;
         });
@@ -95,9 +98,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ResponseCacheManager>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
-            return new ResponseCacheManager(
-                opts.AI.ResponseCacheSize > 0 ? opts.AI.ResponseCacheSize : null,
-                logger: sp.GetService<ILogger<ResponseCacheManager>>());
+            var cFf = sp.GetRequiredService<_Cff>();
+            var cache = cFf.GetOrCreate<string, ChatResponse>("llm-response", new _Cop
+            {
+                MaxEntries = opts.AI.ResponseCacheSize > 0 ? opts.AI.ResponseCacheSize : 256,
+                DefaultTtl = TimeSpan.FromMinutes(EnvironmentConfig.LlmCacheTtlMin)
+            });
+            return new ResponseCacheManager(cache, sp.GetService<ILogger<ResponseCacheManager>>());
         });
 
         services.AddSingleton<ProviderClientManager>(sp =>
@@ -134,6 +141,7 @@ public static class ServiceCollectionExtensions
             if (l1Cfg != null && !string.IsNullOrEmpty(l1Cfg.Provider))
                 primaryProvider = registry.FindByName(l1Cfg.Provider);
             primaryProvider ??= registry.ActiveProviders.FirstOrDefault();
+            primaryProvider ??= registry.ActiveEdgeProviders.FirstOrDefault();
             if (primaryProvider == null)
             {
                 logger?.LogWarning("No active LLM provider found — router will be empty");
@@ -151,9 +159,7 @@ public static class ServiceCollectionExtensions
             var l1Client = primaryProvider.ApiFormat == ApiFormat.Anthropic
                 ? AnthropicChatClientFactory.Create(l1Model, apiKey)
                 : OpenAIChatClientFactory.Create(endpoint, l1Model, apiKey);
-            if (l1EnableThink)
-                l1Client = new ThinkingChatClient(l1Client, true, l1ThoughtInContent);
-            router.Register("l1", l1Client);
+            router.Register("l1", l1Client, l1EnableThink);
             logger?.LogInformation("L1: {Provider}/{Model} @ {Endpoint}{Think}", primaryProvider.Name, l1Model, endpoint, l1EnableThink ? " (thinking)" : "");
 
             // L2
@@ -172,9 +178,7 @@ public static class ServiceCollectionExtensions
             var l2Client = primaryProvider.ApiFormat == ApiFormat.Anthropic
                 ? AnthropicChatClientFactory.Create(l2Model, apiKey)
                 : OpenAIChatClientFactory.Create(endpoint, l2Model, apiKey);
-            if (l2EnableThink)
-                l2Client = new ThinkingChatClient(l2Client, true, l2ThoughtInContent);
-            router.Register("l2", l2Client);
+            router.Register("l2", l2Client, l2EnableThink);
             logger?.LogInformation("L2: {Provider}/{Model}{Think}", primaryProvider.Name, l2Model, l2EnableThink ? " (thinking)" : "");
 
             // L3
@@ -193,11 +197,25 @@ public static class ServiceCollectionExtensions
             var l3Client = primaryProvider.ApiFormat == ApiFormat.Anthropic
                 ? AnthropicChatClientFactory.Create(l3Model, apiKey)
                 : OpenAIChatClientFactory.Create(endpoint, l3Model, apiKey);
-            if (l3EnableThink)
-                l3Client = new ThinkingChatClient(l3Client, true, l3ThoughtInContent);
-            router.Register("l3", l3Client);
+            router.Register("l3", l3Client, l3EnableThink);
             logger?.LogInformation("L3: {Provider}/{Model}{Think}{Reuse}", primaryProvider.Name, l3Model,
                 l3EnableThink ? " (thinking)" : "", l3Model == l1Model ? " (reuses L1)" : "");
+
+            // Register edge (local inference) providers — tried before remote in routing
+            foreach (var edge in registry.ActiveEdgeProviders)
+            {
+                try
+                {
+                    var edgeModel = edge.Models.FirstOrDefault()?.ShortId ?? "default";
+                    var edgeClient = OpenAIChatClientFactory.Create(edge.Endpoint!, edgeModel, "");
+                    router.RegisterEdge(edge.Id, edgeClient);
+                    logger?.LogInformation("Edge: {Name}/{Model} @ {Endpoint}", edge.Name, edgeModel, edge.Endpoint);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "Failed to register edge provider {Name}", edge.Name);
+                }
+            }
 
             return router;
         });
@@ -232,7 +250,8 @@ public static class ServiceCollectionExtensions
 
             var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
             var registry = sp.GetRequiredService<ProviderRegistry>();
-            var primaryProvider = registry.ActiveProviders.FirstOrDefault();
+            var primaryProvider = registry.ActiveProviders.FirstOrDefault()
+                ?? registry.ActiveEdgeProviders.FirstOrDefault();
             var safetyModel = !string.IsNullOrEmpty(opts.AI.Model)
                 ? opts.AI.Model
                 : opts.AI.L1?.Model ?? primaryProvider?.Models.FirstOrDefault()?.ShortId;
@@ -285,9 +304,17 @@ public static class ServiceCollectionExtensions
                 sp.GetService<Glove50Embedder>()));
 
         services.AddSingleton<RemoteEmbeddingCache>(sp =>
-            new RemoteEmbeddingCache(
-                ttl: TimeSpan.FromHours(24),
-                logger: sp.GetService<ILogger<RemoteEmbeddingCache>>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<RemoteEmbeddingCache>.Instance));
+        {
+            var cFf = sp.GetRequiredService<_Cff>();
+            var cache = cFf.GetOrCreate<string, float[]>("remote-embedding", new _Cop
+            {
+                MaxEntries = 10000,
+                DefaultTtl = TimeSpan.FromHours(24)
+            });
+            return new RemoteEmbeddingCache(
+                cache,
+                sp.GetService<ILogger<RemoteEmbeddingCache>>());
+        });
 
         services.AddSingleton<ToolEmbeddingCache>(sp =>
             new ToolEmbeddingCache(

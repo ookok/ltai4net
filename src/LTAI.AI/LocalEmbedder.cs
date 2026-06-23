@@ -36,6 +36,7 @@ public sealed class LocalEmbedder : IDisposable
     private DateTime _lastLoadAttemptAt;
     private bool _disposed;
     private readonly object _loadLock = new();
+    private readonly EmbeddingOptions _options;
     private string? _activeExecutionProvider;
     private bool _usingQuantizedModel;
     private Task<bool>? _loadTask;
@@ -131,7 +132,7 @@ public sealed class LocalEmbedder : IDisposable
     public static string? BaseModelsDirectory { get; private set; }
 
     /// <summary>Base URL for model fallback downloads.</summary>
-    public static string ModelBaseUrl { get; set; } = "https://mogoo.com.cn/";
+    public static string ModelBaseUrl { get; set; } = "https://hf-mirror.com/";
 
     /// <summary>Initialize embedder. Auto-detects the models directory and current model.</summary>
     public LocalEmbedder() : this(null) { }
@@ -139,6 +140,7 @@ public sealed class LocalEmbedder : IDisposable
     /// <summary>Initialize with explicit options.</summary>
     public LocalEmbedder(EmbeddingOptions? options)
     {
+        _options = options ?? Options;
         if (options != null) Options = options;
         if (DefaultDisabled) return;
         Activate();
@@ -197,12 +199,12 @@ public sealed class LocalEmbedder : IDisposable
 
                     opts.AppendExecutionProvider_CPU();
 
-                    var gpuPref = (Options.Gpu ?? "auto").ToLowerInvariant();
+                    var gpuPref = (_options.Gpu ?? "auto").ToLowerInvariant();
                     if (gpuPref is "dml" or "auto")
                     {
                         try
                         {
-                            opts.AppendExecutionProvider_DML(Options.DeviceId);
+                            opts.AppendExecutionProvider_DML(_options.DeviceId);
                             _activeExecutionProvider = "DML";
                         }
                         catch
@@ -214,7 +216,7 @@ public sealed class LocalEmbedder : IDisposable
                     {
                         try
                         {
-                            opts.AppendExecutionProvider_CUDA(Options.DeviceId);
+                            opts.AppendExecutionProvider_CUDA(_options.DeviceId);
                             _activeExecutionProvider = "CUDA";
                         }
                         catch
@@ -225,7 +227,7 @@ public sealed class LocalEmbedder : IDisposable
                     if (_activeExecutionProvider == null)
                         _activeExecutionProvider = "CPU";
 
-                    if (Options.EnableGraphOptimization)
+                    if (_options.EnableGraphOptimization)
                         opts.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
 
                     _session = new InferenceSession(_modelPath, opts);
@@ -509,7 +511,7 @@ public sealed class LocalEmbedder : IDisposable
 
     private static string? FindBaseModelsDirectory()
     {
-        var envDir = Environment.GetEnvironmentVariable("LTAI_EMBEDDING_MODELS_DIR");
+        var envDir = LTAI.Core.Configuration.EnvironmentConfig.EmbeddingModelsDir;
         if (!string.IsNullOrEmpty(envDir) && Directory.Exists(envDir))
             return Path.GetFullPath(envDir);
 
@@ -650,7 +652,8 @@ public sealed class LocalEmbedder : IDisposable
             {
                 await DownloadVocabAsync(http, info.VocabUrl, vocabFile).ConfigureAwait(false);
                 var modelUrl = wantQuant ? info.QuantizedModelUrl! : info.ModelUrl;
-                await DownloadModelFileAsync(http, modelUrl, activeFile!).ConfigureAwait(false);
+                var expectedHash = wantQuant ? info.QuantizedSha256 : info.ModelSha256;
+                await DownloadModelFileAsync(http, modelUrl, activeFile!, expectedHash).ConfigureAwait(false);
             }
             catch when (!triedFallback)
             {
@@ -667,7 +670,8 @@ public sealed class LocalEmbedder : IDisposable
                 var fb = ModelBaseUrl.TrimEnd('/') + "/" + name;
                 var modelFile = wantQuant ? info.QuantizedFileName ?? "model_int8.onnx" : "model.onnx";
                 await DownloadVocabAsync(http, $"{fb}/vocab.txt", vocabFile).ConfigureAwait(false);
-                await DownloadModelFileAsync(http, $"{fb}/{modelFile}", activeFile!).ConfigureAwait(false);
+                var expectedHash = wantQuant ? info.QuantizedSha256 : info.ModelSha256;
+                await DownloadModelFileAsync(http, $"{fb}/{modelFile}", activeFile!, expectedHash).ConfigureAwait(false);
             }
             return true;
         }
@@ -697,12 +701,26 @@ public sealed class LocalEmbedder : IDisposable
         await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
     }
 
-    private static async Task DownloadModelFileAsync(HttpClient http, string url, string destPath)
+    private static async Task DownloadModelFileAsync(HttpClient http, string url, string destPath,
+        string? expectedSha256 = null)
     {
         using var resp = await http.GetAsync(url).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
         using var fs = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
         await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
+
+        if (!string.IsNullOrEmpty(expectedSha256))
+        {
+            await using var fileStream = File.OpenRead(destPath);
+            var hash = await System.Security.Cryptography.SHA256.HashDataAsync(fileStream).ConfigureAwait(false);
+            var hex = Convert.ToHexStringLower(hash);
+            if (!string.Equals(hex, expectedSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                File.Delete(destPath);
+                throw new InvalidOperationException(
+                    $"SHA256 mismatch for {Path.GetFileName(destPath)}: expected {expectedSha256}, got {hex}");
+            }
+        }
     }
 
     /// <summary>Clean up stale model variant when switching quantization mode.</summary>
@@ -743,7 +761,9 @@ public sealed class LocalEmbedder : IDisposable
         string VocabUrl,
         string? QuantizedModelUrl,
         string? QuantizedFileName,
-        int Dimension);
+        int Dimension,
+        string? ModelSha256 = null,
+        string? QuantizedSha256 = null);
 
     public sealed record AvailableModelInfo(string Id, string DisplayName, string Description, int Dimension, bool Downloaded, bool QuantizedDownloaded);
 

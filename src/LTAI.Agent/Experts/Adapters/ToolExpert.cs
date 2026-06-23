@@ -10,6 +10,7 @@ namespace LTAI.Agent.Experts.Adapters;
 public sealed class ToolExpert : IExpertModule
 {
     private readonly EmbeddingClient _embedder;
+    private readonly IToolRegistry _toolRegistry;
 
     public string ExpertId => "tool/expert";
     public ExpertDomain Domain => ExpertDomain.Tool;
@@ -19,21 +20,22 @@ public sealed class ToolExpert : IExpertModule
     public IReadOnlyList<string> KnowledgeTags => new[] { "tool", "execute", "action", "command" };
     public float MinConfidence => 0.30f; // Tools: structured pattern matching, medium-high similarity
 
-    public ToolExpert(EmbeddingClient embedder)
+    public ToolExpert(EmbeddingClient embedder, IToolRegistry toolRegistry)
     {
         _embedder = embedder;
+        _toolRegistry = toolRegistry;
     }
 
     public async Task<ExpertResponse> QueryAsync(ExpertQuery query, CancellationToken ct = default)
     {
-        if (!ToolRegistry.IsInitialized)
+        if (!_toolRegistry.IsInitialized)
         {
             return new ExpertResponse(ExpertId, string.Empty, 0f,
                 [], new ProvenanceInfo("ToolRegistry", null),
                 NoAnswer: true, ClarifyQuestion: "工具注册表未初始化。");
         }
 
-        var results = await ToolRegistry.SearchTopKAsync(
+        var results = await _toolRegistry.SearchTopKAsync(
             query.Query, _embedder, k: query.MaxResults * 2, ct: ct).ConfigureAwait(false);
 
         if (results.Count == 0)

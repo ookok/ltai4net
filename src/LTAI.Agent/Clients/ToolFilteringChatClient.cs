@@ -29,12 +29,13 @@ public sealed class ToolFilteringChatClient : IChatClient
 
     private readonly IChatClient _inner;
     private readonly EmbeddingClient _embedder;
+    private readonly IToolRegistry _toolRegistry;
     private readonly ToolEmbeddingCache? _cache;
     private readonly QueryEmbeddingCache? _queryCache;
     private readonly IChatClient? _l3Client;
     private string? _lastQuery;
     private int _lastToolCount;
-    private readonly MemoryCache _resultCache = new(new MemoryCacheOptions { SizeLimit = 32 });
+    private readonly MemoryCache _resultCache = new(new MemoryCacheOptions());
     private static readonly TimeSpan ResultCacheTtl = TimeSpan.FromSeconds(30);
 
     /// <summary>多轮主动检索统计: (query, rounds, toolsFound) 记录。</summary>
@@ -43,11 +44,13 @@ public sealed class ToolFilteringChatClient : IChatClient
     private readonly List<(string, int, int)> _proactiveHistory = [];
 
     public ToolFilteringChatClient(IChatClient inner, EmbeddingClient embedder,
+        IToolRegistry toolRegistry,
         ToolEmbeddingCache? cache = null, QueryEmbeddingCache? queryCache = null,
         IChatClient? l3Client = null)
     {
         _inner = inner;
         _embedder = embedder;
+        _toolRegistry = toolRegistry;
         _cache = cache;
         _queryCache = queryCache;
         _l3Client = l3Client;
@@ -88,9 +91,9 @@ public sealed class ToolFilteringChatClient : IChatClient
         if (options?.Tools is null || options.Tools.Count == 0)
             return options;
 
-        if (!ToolRegistry.IsInitialized)
+        if (!_toolRegistry.IsInitialized)
         {
-            await ToolRegistry.InitializeAsync(options.Tools, _embedder, _cache, ct).ConfigureAwait(false);
+            await _toolRegistry.InitializeAsync(options.Tools, _embedder, _cache, ct).ConfigureAwait(false);
         }
 
         var query = GetLastUserQuery(messages);
@@ -125,7 +128,7 @@ public sealed class ToolFilteringChatClient : IChatClient
 
             var queryEmb = _queryCache?.Get(query);
             // Stage 1: BM25 + ONNX bi-encoder → RRF fusion → top-20 candidates
-            var hits = await ToolRegistry.SearchTopKAsync(query, _embedder, null,
+            var hits = await _toolRegistry.SearchTopKAsync(query, _embedder, null,
                 RerankCandidateN, queryEmb, ct).ConfigureAwait(false);
 
             // Stage 2: Re-rank — try local ONNX pseudo-cross-encoder first, fall back to L3 LLM
@@ -185,7 +188,7 @@ public sealed class ToolFilteringChatClient : IChatClient
 
         for (int round = 0; round < maxRounds; round++)
         {
-            var hits = await ToolRegistry.SearchTopKAsync(searchQuery, _embedder, null,
+            var hits = await _toolRegistry.SearchTopKAsync(searchQuery, _embedder, null,
                 toolsPerRound, null, ct).ConfigureAwait(false);
 
             foreach (var hit in hits)

@@ -13,8 +13,7 @@ namespace LTAI.Agent.Tools;
 /// </summary>
 public static class SkillScriptRunner
 {
-    private static readonly int _scriptTimeoutMs = int.TryParse(
-        Environment.GetEnvironmentVariable("LTAI_SCRIPT_TIMEOUT_SEC"), out var s) ? Math.Max(10, s) * 1000 : 60_000;
+    private static readonly int _scriptTimeoutMs = EnvironmentConfig.ScriptTimeoutSec * 1000;
     /// <summary>Fallback PATH for sandboxed process execution. Set from config at startup.</summary>
     public static string SystemPathFallback { get; set; } = @"C:\Windows\system32;C:\Windows";
     /// <summary>供 AgentSkillsProviderBuilder.UseFileScriptRunner 使用的委托。</summary>

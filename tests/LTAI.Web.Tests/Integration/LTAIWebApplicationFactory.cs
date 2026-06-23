@@ -44,7 +44,7 @@ public sealed class LTAIWebApplicationFactory : IAsyncLifetime
         // Map endpoints
         _app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow, version = "1.0.0", checks = new object[] { new { name = "kgstore", status = "healthy" } } }));
         _app.MapGet("/ready", () => Results.Json(new { status = "ready", timestamp = DateTime.UtcNow }));
-        _app.MapGet("/ltai/v1/entities", () => Results.Ok(new { count = 2, items = new[] { new { name = "LTAI-Chat", description = "General chat agent" }, new { name = "LTAI-Code", description = "Code agent" } } }));
+        _app.MapGet("/ltai/v1/entities", () => Results.Ok(new { count = 2, items = new[] { new { name = "LTAI-Chat", description = "General chat agent" }, new { name = "LTAI-Dev", description = "Dev agent" } } }));
         _app.MapGet("/ltai/v1/todos", () => Results.Ok(new { remaining = 0, total = 0, summary = "" }));
         _app.MapGet("/ltai/v1/mode", () => Results.Ok(new { mode = "build", icon = "🔨" }));
         _app.MapGet("/ltai/v1/pipelines", () => Results.Ok(new { count = 0, pipelines = Array.Empty<object>() }));

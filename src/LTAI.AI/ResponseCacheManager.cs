@@ -1,38 +1,42 @@
+using LTAI.Core.Caching;
+using LTAI.Core.Configuration;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI;
 
 /// <summary>
 /// In-memory response cache for LLM calls.
-/// SHA256-keyed, 5min TTL, 256-entry LRU.
+/// SHA256-keyed, 5min TTL, backed by unified <see cref="LTAICache{TKey,TValue}"/>.
 /// </summary>
 public sealed class ResponseCacheManager
 {
-    private readonly MemoryCache _cache;
-    private readonly TimeSpan _ttl;
-    private readonly int _sizeLimit;
+    private readonly LTAICache<string, ChatResponse> _cache;
     private readonly ILogger _logger;
+
+    public ResponseCacheManager(
+        LTAICache<string, ChatResponse> cache,
+        ILogger? logger = null)
+    {
+        _cache = cache;
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+    }
 
     public ResponseCacheManager(
         int? sizeLimit = null,
         TimeSpan? ttl = null,
         ILogger? logger = null)
-    {
-        _sizeLimit = sizeLimit ?? 256;
-        _ttl = ttl ?? TimeSpan.FromMinutes(
-            int.TryParse(Environment.GetEnvironmentVariable("LTAI_LLM_CACHE_TTL_MIN"), out var t) ? Math.Max(1, t) : 5);
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
-
-        _cache = new MemoryCache(new MemoryCacheOptions
+        : this(new LTAICache<string, ChatResponse>(new LTAICacheOptions
         {
-            SizeLimit = _sizeLimit,
-            ExpirationScanFrequency = TimeSpan.FromMinutes(1)
-        });
+            MaxEntries = sizeLimit ?? 256,
+            DefaultTtl = ttl ?? TimeSpan.FromMinutes(EnvironmentConfig.LlmCacheTtlMin)
+        }), logger)
+    {
     }
 
     public ResponseCacheManager(int sizeLimit) : this((int?)sizeLimit) { }
+
+    public LTAICacheMetrics Metrics => _cache.Metrics;
 
     /// <summary>Build a hash key from provider, messages, and options.</summary>
     public static string BuildCacheKey(string provider, IEnumerable<ChatMessage> messages, ChatOptions? options)
@@ -48,22 +52,16 @@ public sealed class ResponseCacheManager
 
     public bool TryGet(string key, out ChatResponse? cached)
     {
-        if (_cache.TryGetValue<ChatResponse>(key, out var result))
+        if (_cache.TryGet(key, out cached))
         {
-            cached = result;
             _logger.LogDebug("Cache HIT for key={Key}", key);
             return true;
         }
-        cached = null;
         return false;
     }
 
     public void Set(string key, ChatResponse response)
     {
-        _cache.Set(key, response, new MemoryCacheEntryOptions
-        {
-            Size = 1,
-            AbsoluteExpirationRelativeToNow = _ttl
-        });
+        _cache.Set(key, response);
     }
 }

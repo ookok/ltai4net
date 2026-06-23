@@ -82,8 +82,7 @@ public static class Program
 
         // �?全局超时: 可配�?(LTAI_INIT_TIMEOUT_SEC, 默认 30s)
         // 防止 ONNX 模型加载、EP 探测、或网络请求卡死初始�?
-        var initTimeoutSec = int.TryParse(
-            Environment.GetEnvironmentVariable("LTAI_INIT_TIMEOUT_SEC"), out var t) ? Math.Max(10, t) : 30;
+        var initTimeoutSec = EnvironmentConfig.InitTimeoutSec;
         using var initCts = new CancellationTokenSource(TimeSpan.FromSeconds(initTimeoutSec));
         var ct = initCts.Token;
 

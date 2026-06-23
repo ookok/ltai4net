@@ -53,7 +53,7 @@ public sealed class WebTestsFactory : IDisposable
                         items = new[]
                         {
                             new { name = "LTAI-Chat", description = "General chat agent" },
-                            new { name = "LTAI-Code", description = "Code agent" }
+                            new { name = "LTAI-Dev", description = "Dev agent" }
                         }
                     }));
 

@@ -28,8 +28,7 @@ namespace LTAI.Agent.Indexing;
 /// </summary>
 public sealed class RetryQueueWorker
 {
-    private static readonly TimeSpan[] BackoffSequence = ParseBackoff(
-        Environment.GetEnvironmentVariable("LTAI_RETRY_BACKOFF_SEC") ?? "1,2,4,8,16");
+    private static readonly TimeSpan[] BackoffSequence = ParseBackoff(EnvironmentConfig.RetryBackoffSec);
 
     private static TimeSpan[] ParseBackoff(string csv)
     {
