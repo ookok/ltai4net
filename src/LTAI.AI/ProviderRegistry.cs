@@ -15,9 +15,10 @@ namespace LTAI.AI;
 /// </summary>
 public sealed class ProviderRegistry
 {
+    private readonly ConcurrentDictionary<string, ProviderInfo> _providers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ReaderWriterLockSlim _rwLock = new();
     private readonly ModelsDevClient _modelsDev;
     private readonly ILogger<ProviderRegistry> _logger;
-    private readonly ConcurrentDictionary<string, ProviderInfo> _providers = new(StringComparer.OrdinalIgnoreCase);
 
     public ProviderRegistry(ModelsDevClient modelsDev, ILogger<ProviderRegistry> logger)
     {
@@ -28,6 +29,8 @@ public sealed class ProviderRegistry
 /// <summary>
 /// Initializes the registry. Loads from the bundled models-dev-providers.json file.
 /// Call RefreshFromApiAsync() periodically to update from the live API.
+/// Thread-safe: readers are protected by a RW lock, so concurrent reads
+/// during refresh see either the old or the new complete provider set — never partial.
 /// </summary>
 public void Initialize()
 {
@@ -38,8 +41,18 @@ public void Initialize()
         return;
     }
 
+    var updated = new Dictionary<string, ProviderInfo>(StringComparer.OrdinalIgnoreCase);
     foreach (var p in providers)
-        _providers[p.Id] = p;
+        updated[p.Id] = p;
+
+    _rwLock.EnterWriteLock();
+    try
+    {
+        _providers.Clear();
+        foreach (var kv in updated)
+            _providers[kv.Key] = kv.Value;
+    }
+    finally { _rwLock.ExitWriteLock(); }
 
     _logger.LogInformation("ProviderRegistry ready: {Count} providers, {ModelCount} models",
         _providers.Count, _providers.Values.Sum(p => p.Models.Length));
@@ -47,13 +60,14 @@ public void Initialize()
 
 /// <summary>
 /// Triggers a background refresh from the models.dev API.
+/// Thread-safe: uses the same RW lock as Initialize() for swap semantics.
 /// </summary>
 public async Task RefreshAsync(CancellationToken ct)
 {
     await _modelsDev.RefreshFromApiAsync(ct).ConfigureAwait(false);
     // Re-load after refresh
     Initialize();
-    }
+}
 
     /// <summary>
     /// Parses models.dev api.json format into <see cref="ProviderInfo"/>[].

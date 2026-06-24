@@ -63,6 +63,9 @@ For destructive, security-sensitive, or irreversible operations, always ask for 
 - After each code modification, automatically trigger syntax/lint checks.
 - Fix errors immediately when found; do not wait for user instruction.
 - After fixing, continue the original task automatically without notifying the user.
+- Each agent has an independent Definition of Done (DoD) — auto-validate after execution.
+- DoD includes: no syntax errors, no TODO/FIXME placeholders, no {{}} template residue.
+- On DoD failure, inject error message into context; agent auto-fixes and re-validates.
 </verification>
 
 <context-management>

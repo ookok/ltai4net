@@ -82,7 +82,7 @@ public sealed class DesktopCommandService
         var name = parts.Length > 1 ? parts[1] : "";
         return sub switch
         {
-            "list" or "" => "已注册 Agents: LTAI-Chat, LTAI-Code, LTAI-Data, LTAI-Math, LTAI-Writer, LTAI-LLM, LTAI-System, LTAI-Frontend, LTAI-Chat-Pro, sql-agent",
+            "list" or "" => "已注册 Agents: LTAI-Chat, LTAI-Dev, LTAI-Data, LTAI-QA, LTAI-Ops, LTAI-Math, LTAI-System, LTAI-Writer, LTAI-Arch, LTAI-Office, LTAI-Explore",
             "show" when !string.IsNullOrEmpty(name) => $"Agent '{name}' 详情请查看 DevUI 面板 (Ctrl+1)",
             _ => "用法: /agents list|show <name>",
         };

@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using LTAI.Agent.Pipeline.Steps;
+using LTAI.Core.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Agent.Pipeline;
 
@@ -13,7 +15,7 @@ public sealed class PipelineRunner
 
     /// <summary>Default pre-generation step order (name → execution index).
     /// Steps with the same index run sequentially in definition order.</summary>
-    private static readonly Dictionary<string, int> PreStepOrder = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly Dictionary<string, int> DefaultPreStepOrder = new(StringComparer.OrdinalIgnoreCase)
     {
         ["LoraAdapter"] = 0,
         ["MemoryCaching(Restore)"] = 1,
@@ -26,17 +28,12 @@ public sealed class PipelineRunner
     };
 
     /// <summary>
-    /// Post-generation step plan. Each entry defines a group:
+    /// Default post-generation step plan. Each entry defines a group:
     ///   order: execution sequence (lower runs first)
     ///   parallel: if true, all steps in the group run concurrently
     ///   names: step names in this group
-    ///
-    /// Design: DeltaAnchor → MemoryCaching(Save) → Compaction are sequential
-    /// (they modify context data). Check steps (GrammarCheck, AntiPatternCheck,
-    /// QualityGate, DoDCheck) are independent readers and run in parallel for
-    /// latency reduction. Retrospective runs last.
     /// </summary>
-    private static readonly (int Order, bool Parallel, string[] Names)[] PostStepPlan = [
+    internal static readonly (int Order, bool Parallel, string[] Names)[] DefaultPostStepPlan = [
         (0,  false, ["DeltaAnchor"]),
         (1,  false, ["MemoryCaching(Save)"]),
         (2,  false, ["Compaction"]),
@@ -55,20 +52,25 @@ public sealed class PipelineRunner
 
     /// <summary>
     /// DI-friendly constructor: collects all registered <see cref="IPipelineStep"/>
-    /// instances and orders them by <see cref="PreStepOrder"/> and <see cref="PostStepPlan"/>.
-    /// Steps not in either order map are skipped.
+    /// instances and orders them by the configured or default step plan.
+    /// Steps not in the plan are skipped. Configure via <c>LTAI:Pipeline</c> section
+    /// in appsettings.json.
     /// </summary>
     public PipelineRunner(
         IEnumerable<IPipelineStep> steps,
-        ILogger<PipelineRunner>? logger = null)
+        ILogger<PipelineRunner>? logger = null,
+        IOptions<LTAIOptions>? options = null)
     {
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<PipelineRunner>.Instance;
 
         var stepMap = steps.ToDictionary(s => s.Name, s => s, StringComparer.OrdinalIgnoreCase);
 
-        _preGroups = BuildSequentialGroups(stepMap, PreStepOrder);
+        var cfg = options?.Value?.Pipeline;
+        var preOrder = BuildPreOrder(cfg);
+        var postPlan = BuildPostPlan(cfg);
 
-        _postGroups = PostStepPlan
+        _preGroups = BuildSequentialGroups(stepMap, preOrder);
+        _postGroups = postPlan
             .Select(plan =>
             {
                 var stepEntries = plan.Names
@@ -82,6 +84,20 @@ public sealed class PipelineRunner
             })
             .Where(g => g != null)
             .ToList()!;
+    }
+
+    internal static Dictionary<string, int> BuildPreOrder(PipelineConfig? config)
+    {
+        if (config?.PreSteps is { Length: > 0 })
+            return config.PreSteps.ToDictionary(e => e.Name, e => e.Order, StringComparer.OrdinalIgnoreCase);
+        return DefaultPreStepOrder;
+    }
+
+    internal static (int Order, bool Parallel, string[] Names)[] BuildPostPlan(PipelineConfig? config)
+    {
+        if (config?.PostSteps is { Length: > 0 })
+            return config.PostSteps.Select(g => (g.Order, g.Parallel, g.Names)).ToArray();
+        return DefaultPostStepPlan;
     }
 
     /// <summary>Run the pre-generation pipeline (before LLM call).</summary>
@@ -151,6 +167,8 @@ public sealed class PipelineRunner
         return context;
     }
 
+    private static readonly object _pipelineErrorLock = new();
+
     private async Task<MessageContext> RunParallelGroupAsync(
         MessageContext context, IReadOnlyList<StepEntry> steps)
     {
@@ -180,7 +198,14 @@ public sealed class PipelineRunner
 
         if (errors.Count > 0)
         {
-            context.PipelineError = string.Join("; ", errors.Select(e => $"{e.Name}: {e.Error}"));
+            var msg = string.Join("; ", errors.Select(e => $"{e.Name}: {e.Error}"));
+            lock (_pipelineErrorLock)
+            {
+                if (context.PipelineError == null)
+                    context.PipelineError = msg;
+                else
+                    context.PipelineError += "; " + msg;
+            }
             _logger.LogError("PipelineRunner: parallel group had {Count} error(s): {Errors}",
                 errors.Count, context.PipelineError);
         }

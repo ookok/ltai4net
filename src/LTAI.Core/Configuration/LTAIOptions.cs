@@ -1,3 +1,5 @@
+using System.Threading;
+
 namespace LTAI.Core.Configuration;
 
 /// <summary>
@@ -25,6 +27,7 @@ public sealed class LTAIOptions
     public EscalationConfig Escalation { get; init; } = new();
     public AgentManagementConfig AgentManagement { get; init; } = new();
     public EnvironmentOverrides EnvOverrides { get; init; } = new();
+    public PipelineConfig Pipeline { get; init; } = new();
     public ProviderDefinition[] Providers { get; init; } = [];
     public string DataDirectory { get; init; } = ".livingtree";
     public string ToolsDirectory { get; init; } = "tools";
@@ -53,12 +56,18 @@ public sealed class LTAIOptions
     private static readonly string? EnvPromptsDir = Environment.GetEnvironmentVariable("LTAI_PROMPTS_DIR");
     private static readonly string? EnvMemoryDir = Environment.GetEnvironmentVariable("LTAI_MEMORY_DIR");
 
+    private static readonly Mutex _saveMutex = new(false, "LTAI_SaveLayer_Mutex");
+
     public static void SaveLayerToAppSettings(string layer, string provider, string model)
     {
         try
         {
+            _saveMutex.WaitOne();
             var baseDir = AppContext.BaseDirectory;
             var path = Path.Combine(baseDir, "appsettings.json");
+
+            // Atomic temp-file swap to prevent partial writes from concurrent callers
+            var tmpPath = path + ".tmp";
             System.Text.Json.Nodes.JsonNode json;
             if (File.Exists(path))
                 json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
@@ -78,14 +87,19 @@ public sealed class LTAIOptions
                 ["Provider"] = provider,
                 ["Model"] = model
             };
-            File.WriteAllText(path, json.ToJsonString(new System.Text.Json.JsonSerializerOptions
+            File.WriteAllText(tmpPath, json.ToJsonString(new System.Text.Json.JsonSerializerOptions
             {
                 WriteIndented = true
             }));
+            File.Move(tmpPath, path, overwrite: true);
         }
         catch
         {
             // non-critical, best-effort
+        }
+        finally
+        {
+            try { _saveMutex.ReleaseMutex(); } catch { }
         }
     }
 }

@@ -1,6 +1,6 @@
 # LTAI 4 Net — Agent 指南
 
-多 Agent 框架，基于 Microsoft Agent Framework (MAF)。3 种前端 (TUI/Desktop/Web) + CLI，20 个 agent（由 `agents/*.agent.md` 定义），本地 ONNX 嵌入，YAML 热改编排。
+多 Agent 框架，基于 Microsoft Agent Framework (MAF)。3 种前端 (TUI/Desktop/Web) + CLI，11 个 agent（由 `agents/*.agent.md` 定义），本地 ONNX 嵌入，YAML 热改编排。
 
 ## ⚡ 零配置启动
 
@@ -65,7 +65,7 @@ services.AddLTAIAgent();    // 20 agents、编排、工具
 
 ## Agent 定义
 
-Agent 由 `agents/*.agent.md` YAML front-matter 声明。20 个 agents：`LTAI-Chat`、`LTAI-Chat-Pro`、`LTAI-Code`、`LTAI-Data`、`LTAI-Frontend`、`LTAI-LLM`、`LTAI-Math`、`LTAI-System`、`LTAI-Writer`、`LTAI-SQL`、`LTAI-API`、`LTAI-Arch`、`LTAI-DCI`、`LTAI-Test`、`LTAI-Review`、`LTAI-Debug`、`LTAI-Security`、`LTAI-DevOps`、`LTAI-Office`、`LTAI-Explore`。
+Agent 由 `agents/*.agent.md` YAML front-matter 声明。11 个 agents：`LTAI-Chat`、`LTAI-Dev`、`LTAI-Data`、`LTAI-QA`、`LTAI-Ops`、`LTAI-Math`、`LTAI-System`、`LTAI-Writer`、`LTAI-Arch`、`LTAI-Office`、`LTAI-Explore`（另含 L2 路由 agent `LTAI-Router`）。
 
 ```bash
 ltai agents list          # 一览

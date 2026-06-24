@@ -1052,13 +1052,15 @@ Output only the relationship lines, one per pair. If no clear relationship exist
     private static bool ContainsCodePattern(string text) => QueryUtils.ContainsCodePattern(text);
 
     /// <summary>Intent-based KG gate. Uses FastEmb + cosine similarity.</summary>
+    private static readonly Lazy<KbGraph> _fallbackInstance = new(() =>
+    {
+        try { return new KbGraph(new KgStore(":memory:")); } catch { return null!; }
+    }, LazyThreadSafetyMode.ExecutionAndPublication);
+
     public static bool IsKnowledgeQuery(string text)
     {
-        var instance = Default;
-        if (instance == null)
-        {
-            try { instance = new KbGraph(new KgStore(":memory:")); } catch { return false; }
-        }
+        var instance = Default ?? _fallbackInstance.Value;
+        if (instance == null) return false;
         return instance.IsKnowledgeQueryInstance(text);
     }
 

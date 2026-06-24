@@ -173,7 +173,7 @@ internal static partial class AgentBuilder
         RegisterTextProcessingTools(tools, name, canRead, ws);
         RegisterDelegationTools(tools, name, sp);
         RegisterSessionLineageTools(tools, name, sp);
-        RegisterBuildAndPublishTools(tools, name, ws, canExec);
+        RegisterBuildAndPublishTools(tools, name, ws, canExec, yamlTools);
         RegisterSandboxTools(tools, name, ws, yamlTools, sp);
         RegisterCommunicationTools(tools, name, httpFactory, yamlTools, sp);
 
@@ -288,7 +288,7 @@ internal static partial class AgentBuilder
         if (canRead && !isPlanMode)
             tools.Add(AIFunctionFactory.Create(codeChunkIndex.SemanticCodeSearch));
 
-        RegisterDebugTools(tools, name, sp);
+        RegisterDebugTools(tools, name, sp, yamlTools);
         
         // SubagentTools — registered last to capture the complete tool list for subagents
         if (!isPlanMode)
@@ -299,7 +299,7 @@ internal static partial class AgentBuilder
 
         // Review & ParallelReview — registered last once toolList is complete
         if (!isPlanMode)
-            RegisterReviewTools(tools, name, ws, palaceStore, sp, guardedLlm, toolList);
+            RegisterReviewTools(tools, name, ws, yamlTools, palaceStore, sp, guardedLlm, toolList);
 
         // P2: Register tools in the central AgentToolStore (MAF-aligned tool discovery).
         sp.GetService<AgentToolStore>()?.RegisterRange(name, toolList);

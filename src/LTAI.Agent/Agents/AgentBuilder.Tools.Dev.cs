@@ -34,10 +34,13 @@ partial class AgentBuilder
         tools.Add(AIFunctionFactory.Create(git.GitRemote));
     }
 
-    static void RegisterReviewTools(ToolSet tools, string name, string ws, PalaceStore? palaceStore = null,
+    static void RegisterReviewTools(ToolSet tools, string name, string ws, string[]? yamlTools,
+        PalaceStore? palaceStore = null,
         IServiceProvider? sp = null, IChatClient? llm = null, IReadOnlyList<AITool>? allTools = null)
     {
-        if (name is not ("LTAI-Chat" or "LTAI-QA" or "LTAI-Dev" or "LTAI-Writer" or "LTAI-Ops")) return;
+        if (yamlTools != null
+            ? !HasYamlTool(yamlTools, "review")
+            : name is not ("LTAI-Chat" or "LTAI-QA" or "LTAI-Dev" or "LTAI-Writer" or "LTAI-Ops")) return;
         var review = new ReviewTools(ws, palaceStore, sp, llm, allTools);
         tools.Add(AIFunctionFactory.Create(review.LoadReviewRules));
         tools.Add(AIFunctionFactory.Create(review.GroupChanges));
@@ -79,9 +82,11 @@ partial class AgentBuilder
         }, "LspGetDiagnostics", "Get current LSP diagnostics for open files"));
     }
 
-    static void RegisterDebugTools(ToolSet tools, string name, IServiceProvider sp)
+    static void RegisterDebugTools(ToolSet tools, string name, IServiceProvider sp, string[]? yamlTools)
     {
-        if (name is not ("LTAI-Chat" or "LTAI-Dev" or "LTAI-System")) return;
+        if (yamlTools != null
+            ? !HasYamlTool(yamlTools, "debug")
+            : name is not ("LTAI-Chat" or "LTAI-Dev" or "LTAI-System")) return;
         var debugBridge = sp.GetService<LTAI.Core.Debugging.IDebugBridge>();
         if (debugBridge == null) return;
         var debug = new DebugTools(debugBridge);
@@ -102,9 +107,11 @@ partial class AgentBuilder
         tools.Add(AIFunctionFactory.Create(debug.DebugAnalyzeFailure));
     }
 
-    static void RegisterBuildAndPublishTools(ToolSet tools, string name, string ws, bool canExec)
+    static void RegisterBuildAndPublishTools(ToolSet tools, string name, string ws, bool canExec, string[]? yamlTools)
     {
-        if (name is not ("LTAI-Chat" or "LTAI-Dev" or "LTAI-Ops" or "LTAI-QA")) return;
+        if (yamlTools != null
+            ? !HasYamlTool(yamlTools, "build")
+            : name is not ("LTAI-Chat" or "LTAI-Dev" or "LTAI-Ops" or "LTAI-QA")) return;
         var build = new BuildTools(ws);
         tools.Add(AIFunctionFactory.Create(build.BuildProject));
         tools.Add(AIFunctionFactory.Create(build.BuildAndFix));
