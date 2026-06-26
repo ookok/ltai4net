@@ -518,17 +518,6 @@ public sealed class AgentWorkflows
         }
     }
 
-    private static async Task<StreamingRun> RunWorkflowWithTimeoutAsync(
-        Func<ValueTask<StreamingRun>> factory,
-        string kind, string? traceId, CancellationToken ct, TimeSpan timeout)
-    {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(timeout);
-        try { return await factory().ConfigureAwait(false); }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        { throw new TimeoutException($"{kind} workflow timed out after {timeout.TotalSeconds:F0}s [trace={traceId}]."); }
-    }
-
     /// <summary>
     /// P15: try the registry-backed greeting workflow first. If the
     /// registry is null or has no <c>greeting</c> workflow loaded, fall back
@@ -541,15 +530,18 @@ public sealed class AgentWorkflows
     /// greeting+query message (e.g. "早上好 帮我查天气") and fall through to
     /// the LLM handoff so the user's substantive request isn't lost.
     /// </remarks>
+    public async Task<string?> TryRunGreetingAsync(string task, CancellationToken ct)
+        => await RunGreetingFastPathInternal(task, ct).ConfigureAwait(false);
+
     /// <summary>Get the names of all registered specialist agents (excludes router).</summary>
     public IReadOnlyList<string> GetSpecialistNames()
         => _specialists.Keys.ToArray();
 
     /// <summary>Run the greeting fast-path (YAML or C# fallback).</summary>
     public async Task<string?> RunGreetingFastPathAsync(string task, CancellationToken ct)
-        => await TryRunGreetingAsync(task, ct).ConfigureAwait(false);
+        => await RunGreetingFastPathInternal(task, ct).ConfigureAwait(false);
 
-    private async Task<string?> TryRunGreetingAsync(string task, CancellationToken ct)
+    private async Task<string?> RunGreetingFastPathInternal(string task, CancellationToken ct)
     {
         // P14.9 review: pre-check for mixed greeting+query.
         // Use intent classification instead of simple length threshold.
@@ -575,7 +567,7 @@ public sealed class AgentWorkflows
                         if (evt is MessageActivityEvent mae && !string.IsNullOrWhiteSpace(mae.Message))
                             return mae.Message;
                     }
-                    return null;
+                    // Workflow ran but produced no output — continue to next workflow name
                 }
             }
         }
@@ -594,7 +586,9 @@ public sealed class AgentWorkflows
 
         if (string.IsNullOrWhiteSpace(task)) return false;
         var trimmed = task.Trim();
-        if (trimmed.Length <= 12) return true;
+        // Fallback: use configurable threshold via env var (default 15 chars)
+        var maxLen = EnvironmentConfig.GreetingMaxLength;
+        if (trimmed.Length <= maxLen) return true;
         return false;
     }
 }

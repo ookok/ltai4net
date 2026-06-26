@@ -31,15 +31,17 @@ public sealed class PipelineRunner
     /// Default post-generation step plan. Each entry defines a group:
     ///   order: execution sequence (lower runs first)
     ///   parallel: if true, all steps in the group run concurrently
+    ///   alwaysRun: if true, runs even when pipeline is blocked (for critic-repair synthesis)
     ///   names: step names in this group
     /// </summary>
-    internal static readonly (int Order, bool Parallel, string[] Names)[] DefaultPostStepPlan = [
-        (0,  false, ["DeltaAnchor"]),
-        (1,  false, ["MemoryCaching(Save)"]),
-        (2,  false, ["Compaction"]),
-        (3,  false, ["DiscoursePlanning"]),
-        (4,  true,  ["GrammarCheck", "AntiPatternCheck", "QualityGate", "DoDCheck", "ThinkingTag"]),
-        (5,  false, ["Retrospective"]),
+    internal static readonly (int Order, bool Parallel, bool AlwaysRun, string[] Names)[] DefaultPostStepPlan = [
+        (0,  false, false, ["DeltaAnchor"]),
+        (1,  false, false, ["MemoryCaching(Save)"]),
+        (2,  false, false, ["Compaction"]),
+        (3,  false, false, ["DiscoursePlanning"]),
+        (4,  true,  false, ["GrammarCheck", "AntiPatternCheck", "QualityGate", "DoDCheck", "ThinkingTag"]),
+        (5,  false, true,  ["CriticRepair"]),
+        (6,  false, false, ["Retrospective"]),
     ];
 
     private sealed record StepEntry(
@@ -48,6 +50,7 @@ public sealed class PipelineRunner
 
     private sealed record StepGroup(
         bool IsParallel,
+        bool AlwaysRun,
         IReadOnlyList<StepEntry> Steps);
 
     /// <summary>
@@ -79,7 +82,7 @@ public sealed class PipelineRunner
                     .Select(s => new StepEntry(s.Name, s.ProcessAsync))
                     .ToList();
                 return stepEntries.Count > 0
-                    ? new StepGroup(plan.Parallel, stepEntries)
+                    ? new StepGroup(plan.Parallel, plan.AlwaysRun, stepEntries)
                     : null;
             })
             .Where(g => g != null)
@@ -93,10 +96,10 @@ public sealed class PipelineRunner
         return DefaultPreStepOrder;
     }
 
-    internal static (int Order, bool Parallel, string[] Names)[] BuildPostPlan(PipelineConfig? config)
+    internal static (int Order, bool Parallel, bool AlwaysRun, string[] Names)[] BuildPostPlan(PipelineConfig? config)
     {
         if (config?.PostSteps is { Length: > 0 })
-            return config.PostSteps.Select(g => (g.Order, g.Parallel, g.Names)).ToArray();
+            return config.PostSteps.Select(g => (g.Order, g.Parallel, g.AlwaysRun, g.Names)).ToArray();
         return DefaultPostStepPlan;
     }
 
@@ -117,7 +120,9 @@ public sealed class PipelineRunner
                 ? await RunParallelGroupAsync(context, group.Steps).ConfigureAwait(false)
                 : await RunSequentialGroupAsync(context, group.Steps).ConfigureAwait(false);
 
-            if (ShouldBreak(context)) break;
+            // AlwaysRun groups (e.g. CriticRepair) execute even when pipeline is blocked,
+            // so they can synthesize repair feedback before the pipeline breaks.
+            if (!group.AlwaysRun && ShouldBreak(context)) break;
         }
         return context;
     }
@@ -138,7 +143,7 @@ public sealed class PipelineRunner
         }
         return byOrder
             .OrderBy(kv => kv.Key)
-            .Select(kv => new StepGroup(false, kv.Value))
+            .Select(kv => new StepGroup(false, false, kv.Value))
             .ToList();
     }
 

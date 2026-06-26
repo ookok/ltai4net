@@ -37,6 +37,7 @@ public static partial class ServiceCollectionExtensions
     public static IServiceCollection AddLTAIAgent(this IServiceCollection services, out IReadOnlyList<string> registeredAgentNames)
     {
         services.AddLTAIAgentCore(out registeredAgentNames);
+        services.AddLTAIAgentSharedInfra();
         services.AddLTAIAgentGraphInfra();
         services.AddLTAIAgentExperts();
         services.AddLTAIAgentPipeline();

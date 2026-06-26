@@ -25,7 +25,7 @@ namespace LTAI.Agent.Vector;
 /// Multi-language Code Graph (SQLite + FTS5 + CTE).
 /// Pipeline: LLM rewrite → FTS5 BM25 → CTE graph expansion → context injection.
 /// </summary>
-public sealed class CgGraph : AIContextProvider
+public sealed class CgGraph : AIContextProvider, IDisposable
 {
     private readonly KgStore _store;
     private readonly IChatClient? _rewriter;
@@ -59,12 +59,14 @@ public sealed class CgGraph : AIContextProvider
     /// <param name="ws">Workspace root for code indexing.</param>
     public CgGraph(KgStore store, IChatClient? rewriter = null,
         LTAI.AI.EmbeddingClient? embedder = null,
+        TreeSitterParser? parser = null,
         ILogger<CgGraph>? logger = null, string? ws = null)
         : base(null, null, null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _rewriter = rewriter;
         _embedder = embedder;
+        _parser = parser;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _ws = ws ?? Directory.GetCurrentDirectory();
     }
@@ -77,8 +79,6 @@ public sealed class CgGraph : AIContextProvider
     {
         var dir = directory ?? _ws;
         if (!Directory.Exists(dir)) return "Directory not found";
-
-        _parser ??= new TreeSitterParser(_logger);
 
         var files = DirectoryWalker.WalkToArray(
             dir,
@@ -563,7 +563,7 @@ public sealed class CgGraph : AIContextProvider
                 [new ChatMessage(ChatRole.User, prompt)], cancellationToken: ct).ConfigureAwait(false);
             return resp.Text?.Trim() ?? query;
         }
-        catch { return query; }
+        catch (Exception ex) { _logger?.LogWarning(ex, "CgGraph query rewriting failed, using original query"); return query; }
     }
 
     private static string MapKind(string tsKind) => tsKind.ToLowerInvariant() switch

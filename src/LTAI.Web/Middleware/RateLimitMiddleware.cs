@@ -16,7 +16,7 @@ public sealed class RateLimitMiddleware
     private readonly int _windowSec;
     private readonly ConcurrentDictionary<string, WindowState> _windows = new(StringComparer.OrdinalIgnoreCase);
     private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(EnvironmentConfig.RateLimitCleanupMin);
-    private DateTime _lastCleanup = DateTime.UtcNow;
+    private long _lastCleanupTicks = DateTime.UtcNow.Ticks;
 
     public RateLimitMiddleware(RequestDelegate next)
     {
@@ -40,10 +40,12 @@ public sealed class RateLimitMiddleware
         if (ip.Contains(',')) ip = ip.Split(',')[0].Trim();
         var now = DateTime.UtcNow;
 
-        // Periodic cleanup: remove only stale entries beyond 2x window
-        if (now - _lastCleanup > CleanupInterval)
+        // Periodic cleanup: remove only stale entries beyond 2x window (atomic check)
+        var prevTicks = Interlocked.Read(ref _lastCleanupTicks);
+        if (now.Ticks - prevTicks > CleanupInterval.Ticks)
         {
-            _lastCleanup = now;
+            if (Interlocked.CompareExchange(ref _lastCleanupTicks, now.Ticks, prevTicks) == prevTicks)
+            {
             var cutoff = now - TimeSpan.FromSeconds(_windowSec * 2);
             var keysToRemove = new List<string>(Math.Min(_windows.Count, 64));
             foreach (var kv in _windows)
@@ -56,6 +58,7 @@ public sealed class RateLimitMiddleware
             }
             foreach (var key in keysToRemove)
                 _windows.TryRemove(key, out _);
+            }
         }
 
         var window = _windows.AddOrUpdate(ip,

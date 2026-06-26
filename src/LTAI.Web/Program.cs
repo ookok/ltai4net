@@ -697,32 +697,42 @@ try
 
             var roomName = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
             var cnt = 0;
+            var failed = 0;
+            var errors = new List<string>();
             foreach (var f in findings)
             {
-                await store.StoreAsync(
-                    wing: "audit", room: roomName,
-                    content: System.Text.Json.JsonSerializer.Serialize(new
-                    {
-                        f.Severity, f.File, f.Line,
-                        Category = f.Category ?? "general",
-                        f.Description,
-                        PersistedAt = DateTimeOffset.UtcNow.ToString("o"),
-                    }),
-                    role: "audit",
-                    importance: f.Severity switch { "P0" => 0.9, "P1" => 0.7, _ => 0.5 },
-                    agentId: "review_tool",
-                    metadata: new Dictionary<string, object>
-                    {
-                        ["severity"] = f.Severity ?? "P2",
-                        ["file"] = f.File ?? "",
-                        ["line"] = f.Line ?? "",
-                        ["category"] = f.Category ?? "general",
-                        ["status"] = "open",
-                    },
-                    ttlMs: null);
-                cnt++;
+                try
+                {
+                    await store.StoreAsync(
+                        wing: "audit", room: roomName,
+                        content: System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            f.Severity, f.File, f.Line,
+                            Category = f.Category ?? "general",
+                            f.Description,
+                            PersistedAt = DateTimeOffset.UtcNow.ToString("o"),
+                        }),
+                        role: "audit",
+                        importance: f.Severity switch { "P0" => 0.9, "P1" => 0.7, _ => 0.5 },
+                        agentId: "review_tool",
+                        metadata: new Dictionary<string, object>
+                        {
+                            ["severity"] = f.Severity ?? "P2",
+                            ["file"] = f.File ?? "",
+                            ["line"] = f.Line ?? "",
+                            ["category"] = f.Category ?? "general",
+                            ["status"] = "open",
+                        },
+                        ttlMs: null);
+                    cnt++;
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    errors.Add($"{f.File ?? "?"}: {ex.Message}");
+                }
             }
-            return Results.Ok(new { persisted = cnt, room = roomName });
+            return Results.Ok(new { persisted = cnt, failed, errors, room = roomName });
         }
         catch (Exception ex)
         {
@@ -813,11 +823,11 @@ try
             checks.Add(new { name = "llm_providers", status = "unhealthy", error = "LLM providers unavailable" });
         }
 
-        var allHealthy = checks.All(c =>
+        var allHealthy = true;
+        foreach (dynamic c in checks)
         {
-            var status = c.GetType().GetProperty("status")?.GetValue(c)?.ToString();
-            return status == "healthy";
-        });
+            if (c.status != "healthy") { allHealthy = false; break; }
+        }
 
         // Check token savings
         try

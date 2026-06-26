@@ -177,6 +177,11 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
             }
         }
 
+        try { _batchCts.Dispose(); } catch { }
+        try { _persistGate.Dispose(); } catch { }
+
+        await base.StopAsync(isForced).ConfigureAwait(false);
+
         await base.StopAsync(isForced).ConfigureAwait(false);
     }
 
@@ -344,6 +349,7 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             PRAGMA journal_mode = WAL;
+            PRAGMA busy_timeout = 5000;
             CREATE TABLE IF NOT EXISTS orchestration_state (
                 instance_id     TEXT PRIMARY KEY,
                 execution_id    TEXT,

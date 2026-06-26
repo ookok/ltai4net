@@ -87,6 +87,11 @@ public sealed partial class PalaceStore : IDisposable
             Pooling = true,
         }.ToString();
         EnsureSchema();
+
+        // EvoEmbedding segment-batching: initialize batch write queue
+        _writeQueue = new MemoryWriteQueue(_hnsw, _hnswMap, _hnswRev, _hnswLock, _logger,
+            batchSize: MemoryWriteQueue.DefaultBatchSize,
+            flushIntervalMs: MemoryWriteQueue.DefaultFlushIntervalMs);
     }
 
     public static PalaceStore CreateShared(EmbeddingClient embedder, string kgDbPath, ILogger<PalaceStore>? logger = null)
@@ -112,6 +117,7 @@ public sealed partial class PalaceStore : IDisposable
 
     public void Dispose()
     {
+        _writeQueue?.Dispose();
         _hnsw?.Dispose();
         _hnswLock?.Dispose();
     }

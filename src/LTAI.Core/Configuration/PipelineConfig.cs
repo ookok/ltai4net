@@ -16,5 +16,6 @@ public sealed class PostStepGroup
 {
     public int Order { get; init; }
     public bool Parallel { get; init; }
+    public bool AlwaysRun { get; init; }
     public string[] Names { get; init; } = [];
 }

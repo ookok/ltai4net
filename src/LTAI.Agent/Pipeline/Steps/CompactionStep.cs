@@ -3,23 +3,11 @@
 //  CompactionStep — history/token compression with TencentDB-
 //  Agent-Memory inspired context offload + Mermaid state diagram.
 //
-//  Before compression, heavy tool results are:
-//    1) Offloaded to .livingtree/refs/*.md (ContextOffloader)
-//    2) Replaced with [refs/{file}#{hash}] references
-//    3) A Mermaid stateDiagram-v2 is injected for lightweight state tracking
-//
-//  Phase 3b: wraps ContentCompressor / TrimHistory logic.
-//  When context usage exceeds a threshold, the step compresses
-//  accumulated messages to fit within budget.
-//
-//  Features:
-//    - Progressive back-pressure (4 levels: light/moderate/heavy/critical)
-//    - Adaptive keepLastN from token budget (R-SWA inspired)
-//    - Fidelity scoring injected for LLM awareness
-//    - User feedback loop: ref expansions reduce aggressiveness
-//    - YAML hot-reloadable config from .livingtree/workflows/compact-config.json
-//    - Cross-session refs naming by file hash
-//    - Lazy refs restoration via MessageContext callbacks
+//  V2: KVEraser-inspired incremental compaction (arXiv:2606.17034).
+//  Instead of re-compressing all messages each time, tracks which
+//  messages have been compressed and skips them. Only newly-added,
+//  uncompressed messages are compacted — avoiding "re-compression
+//  damage" and reducing CPU cost for stable context windows.
 // ═══════════════════════════════════════════════════════════════
 
 using System.Text;
@@ -48,6 +36,10 @@ public sealed class CompactionStep : IPipelineStep
     private static readonly TimeSpan s_configReloadInterval = TimeSpan.FromSeconds(30);
     private readonly string _configPath;
     private int _streamTokenCheckCounter;
+
+    // KVEraser-inspired: track compressed message hashes for incremental compaction.
+    // Messages whose content hash matches a previously-compressed version are skipped.
+    private readonly HashSet<int> _compressedHashes = [];
 
     public string Name => "Compaction";
 
@@ -217,18 +209,28 @@ public sealed class CompactionStep : IPipelineStep
         }
         else if (contextRatio >= t.Light)
         {
-            // light: semantic compression first, fallback to tiered
+            // light: semantic compression first, fallback to tiered (KVEraser: incremental)
             var compressedCount = 0;
+            var skippedCount = 0;
             var originalLength = 0;
             var compressedLength = 0;
 
             if (_offloader != null && context.Messages.Count > 3)
             {
-                // Use semantic compression on the earliest non-system messages
+                // Semantic compression on earliest non-system, uncompressed messages
                 for (int i = 0; i < context.Messages.Count / 2; i++)
                 {
                     var msg = context.Messages[i];
                     if (msg.Role == ChatRole.System || string.IsNullOrEmpty(msg.Text)) continue;
+
+                    // KVEraser: skip if already compressed (same content hash)
+                    var msgHash = GetContentHash(msg.Text);
+                    if (_compressedHashes.Contains(msgHash))
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
                     originalLength += msg.Text.Length;
 
                     var compressed = await _offloader.CompressSemanticallyAsync(msg.Text, targetRatio: 0.6).ConfigureAwait(false);
@@ -237,52 +239,65 @@ public sealed class CompactionStep : IPipelineStep
                         context.Messages[i] = new ChatMessage(msg.Role, compressed) { AuthorName = msg.AuthorName };
                         compressedLength += compressed.Length;
                         compressedCount++;
+                        _compressedHashes.Add(GetContentHash(compressed));
                     }
                     else
                     {
                         compressedLength += msg.Text.Length;
+                        _compressedHashes.Add(msgHash);
                     }
                 }
             }
 
-            if (compressedCount == 0)
+            if (compressedCount == 0 && skippedCount == 0)
             {
-                // Fallback: standard tiered
+                // Fallback: standard tiered with incremental skip
                 var messageTexts = context.Messages.Where(m => !string.IsNullOrEmpty(m.Text)).Select(m => m.Text!).ToList();
                 var convType = _tiered.DetectType(messageTexts);
-                var lowPriorityCount = 0;
 
                 for (int i = 0; i < context.Messages.Count; i++)
                 {
                     var msg = context.Messages[i];
                     if (string.IsNullOrEmpty(msg.Text)) continue;
+
+                    var msgHash = GetContentHash(msg.Text);
+                    if (_compressedHashes.Contains(msgHash))
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
                     var tier = _tiered.Classify(i, context.Messages.Count);
                     var ratio = _tiered.GetCompressionRatio(tier, convType);
                     originalLength += msg.Text.Length;
-                    if (tier == LTAI.Agent.Context.CompressTier.LowPriority) lowPriorityCount++;
                     var compressed = CompressWithRatio(msg.Text, ratio);
                     if (compressed.Length < msg.Text.Length)
                     {
                         context.Messages[i] = new ChatMessage(msg.Role, compressed) { AuthorName = msg.AuthorName };
                         compressedLength += compressed.Length;
                         compressedCount++;
+                        _compressedHashes.Add(GetContentHash(compressed));
                     }
                     else
                     {
                         compressedLength += msg.Text.Length;
+                        _compressedHashes.Add(msgHash);
                     }
                 }
             }
 
-            compressionAction = $"light(semantic/tiered {compressedCount}/{context.Messages.Count})";
+            compressionAction = $"light(semantic/tiered {compressedCount}c/{skippedCount}s/{context.Messages.Count}t)";
             context.CompactionPressure = Math.Max(0, context.CompactionPressure - 1);
 
             if (compressedCount > 0)
             {
                 var ratio = originalLength > 0 ? (double)compressedLength / originalLength : 1.0;
-                context.Set("CompactionSummary", $"semantic/tiered compression ({ratio:P0})");
-                _logger.LogInformation("CompactionStep: light compression ({Ratio:P0})", ratio);
+                context.Set("CompactionSummary", $"semantic/tiered compression ({ratio:P0}, {skippedCount} incremental skips)");
+                _logger.LogInformation("CompactionStep: light compression ({Ratio:P0}, {Skipped} skipped)", ratio, skippedCount);
             }
+
+            // Prune stale hashes when set grows too large
+            if (_compressedHashes.Count > 500) _compressedHashes.Clear();
         }
         else
         {
@@ -420,4 +435,19 @@ public sealed class CompactionStep : IPipelineStep
         if (targetLen < 50) targetLen = 50;
         return text.Length <= targetLen ? text : text[..targetLen] + "\n...(压缩)";
     }
+
+    /// <summary>KVEraser-inspired: content hash for incremental compaction skip detection.</summary>
+    private static int GetContentHash(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+        var hash = 17;
+        // Hash first 256 chars (enough to identify unique messages, fast enough to not dominate)
+        var len = Math.Min(text.Length, 256);
+        for (int i = 0; i < len; i++)
+            hash = hash * 31 + text[i];
+        return hash;
+    }
+
+    /// <summary>Reset incremental compaction state (e.g., on new session).</summary>
+    public void ResetIncrementalState() => _compressedHashes.Clear();
 }

@@ -26,16 +26,9 @@
     <Reference Include="Microsoft.Agents.AI.Mcp" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Mcp.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Mcp.dll')" />
     <Reference Include="Microsoft.Agents.AI.DurableTask" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.DurableTask.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.DurableTask.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI\Microsoft.Agents.AI.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.dll')" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.OpenAI\Microsoft.Agents.AI.OpenAI.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.OpenAI.dll')" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Tools.Shell\Microsoft.Agents.AI.Tools.Shell.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Tools.Shell.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Workflows\Microsoft.Agents.AI.Workflows.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Workflows.dll')" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Workflows.Declarative\Microsoft.Agents.AI.Workflows.Declarative.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Workflows.Declarative.dll')" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Workflows.Declarative.Mcp\Microsoft.Agents.AI.Workflows.Declarative.Mcp.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Workflows.Declarative.Mcp.dll')" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Harness\Microsoft.Agents.AI.Harness.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Harness.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting\Microsoft.Agents.AI.Hosting.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.dll')" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Mem0\Microsoft.Agents.AI.Mem0.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Mem0.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Mcp\Microsoft.Agents.AI.Mcp.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Mcp.dll')" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.DurableTask\Microsoft.Agents.AI.DurableTask.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.DurableTask.dll')" />
     <PackageReference Include="Microsoft.DurableTask.InProcessTestHost" />
     <PackageReference Include="ModelContextProtocol" />
     <PackageReference Include="Microsoft.Extensions.AI" />

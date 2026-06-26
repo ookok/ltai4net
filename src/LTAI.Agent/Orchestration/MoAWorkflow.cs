@@ -20,8 +20,8 @@ public sealed class MoAWorkflow
         ILogger<MoAWorkflow> logger,
         TimeSpan? workflowTimeout = null)
     {
-        _proposers = proposers;
-        _aggregators = aggregators;
+        _proposers = proposers ?? throw new ArgumentNullException(nameof(proposers));
+        _aggregators = aggregators ?? throw new ArgumentNullException(nameof(aggregators));
         _logger = logger;
         _workflowTimeout = workflowTimeout ?? TimeSpan.FromSeconds(120);
     }
@@ -54,9 +54,10 @@ public sealed class MoAWorkflow
 
         _logger.LogInformation("MoA: Layer 0 complete, {C} proposals", proposals.Length);
 
-        // Layer 1..L: aggregators progressively synthesize
+        // Layer 1..L: aggregators progressively synthesize (capped at 10 layers)
         var currentInputs = proposals.ToList();
-        for (int layer = 0; layer < LayerCount; layer++)
+        var maxLayers = Math.Min(LayerCount, 10);
+        for (int layer = 0; layer < maxLayers; layer++)
         {
             var aggregator = _aggregators[layer];
             var aggregationTasks = currentInputs.Select(async (input, i) =>

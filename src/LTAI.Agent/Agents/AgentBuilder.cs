@@ -211,8 +211,8 @@ internal static partial class AgentBuilder
         var codeGraph = sp.GetRequiredService<CgGraph>();
         var codeChunkIndex = sp.GetRequiredService<LTAI.Agent.Indexing.CodeChunkIndex>();
 
-        // Wasmtime sandbox: WASM-based code execution with WASI capability restrictions.
-        var wasmtimeSandbox = new WasmtimeSandbox(ws, loggerFactory.CreateLogger<WasmtimeSandbox>());
+        // Wasmtime sandbox: WASM-based code execution with WASI capability restrictions (DI Singleton).
+        var wasmtimeSandbox = sp.GetRequiredService<WasmtimeSandbox>();
 
         // Skills provider: loads SKILL.md from skills/
         var skillDirs = ResolveSkillDirectories();

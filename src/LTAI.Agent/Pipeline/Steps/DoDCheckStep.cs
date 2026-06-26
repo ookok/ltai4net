@@ -62,7 +62,9 @@ public sealed class DoDCheckStep : IPipelineStep
 
     private Task<bool> CheckNoSyntaxErrorsAsync(MessageContext context)
     {
-        var hasErrors = context.GrammarCheckBlocked;
+        // Read via ConcurrentDictionary to avoid race with GrammarCheckStep in parallel group.
+        // GrammarCheckStep writes context.Set("GrammarErrors", List<GrammarError>) which is thread-safe.
+        var hasErrors = context.TryGet<object>("GrammarErrors", out _);
         return Task.FromResult(!hasErrors);
     }
 

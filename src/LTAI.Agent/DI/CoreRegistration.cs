@@ -136,9 +136,10 @@ public static partial class ServiceCollectionExtensions
         {
             var store = sp.GetRequiredKeyedService<KgStore>("cg");
             var llm = sp.GetService<IChatClient>();
-            var embedder = sp.GetService<EmbeddingClient>();
+            var embedder = sp.GetService<LTAI.AI.EmbeddingClient>();
+            var parser = sp.GetRequiredService<CodeAnalysis.TreeSitterParser>();
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<CgGraph>();
-            return new CgGraph(store, llm, embedder, logger, Directory.GetCurrentDirectory());
+            return new CgGraph(store, llm, embedder, parser, logger, Directory.GetCurrentDirectory());
         });
 
         // HyGRAG 社区摘要缓存 + 混合图查询 (TODO: implement CommunitySummaryStore + HybridGraphQuery)

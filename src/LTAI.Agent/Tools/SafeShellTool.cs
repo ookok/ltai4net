@@ -160,6 +160,16 @@ public sealed class SafeShellTool
         psi.EnvironmentVariables.Remove("DYLD_INSERT_LIBRARIES");
         psi.EnvironmentVariables.Remove("COR_ENABLE_PROFILING");
         psi.EnvironmentVariables.Remove("COR_PROFILER");
+        // Remove API keys and secrets from child process environment
+        foreach (var key in new[] {
+            "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "SILICONFLOW_API_KEY", "DASHSCOPE_API_KEY",
+            "AZURE_OPENAI_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "MISTRAL_API_KEY",
+            "GITHUB_TOKEN", "NPM_TOKEN", "NUGET_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+            "AZURE_STORAGE_KEY", "CONNECTION_STRING", "JWT_SECRET", "ENCRYPTION_KEY"
+        })
+        {
+            psi.EnvironmentVariables.Remove(key);
+        }
         using var process = new Process { StartInfo = psi };
 
         var output = new StringBuilder();
@@ -186,6 +196,9 @@ public sealed class SafeShellTool
             {
                 process.Kill(entireProcessTree: true);
                 await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                // Await stream readers to avoid race on StringBuilder below
+                try { await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false); }
+                catch { /* best-effort stream drain after kill */ }
                 return $"⏱️ 命令超时 ({timeoutSec}s)，已终止。\n"
                      + $"部分输出:\n{ContentTruncator.Truncate(output.ToString(), 2000)}";
             }

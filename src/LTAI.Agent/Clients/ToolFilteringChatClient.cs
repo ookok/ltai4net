@@ -111,7 +111,9 @@ public sealed class ToolFilteringChatClient : IChatClient
 
         if (!string.IsNullOrWhiteSpace(query))
         {
-            var cacheKey = $"tf:{query}|{tools.Count}";
+            // Cache key includes tool names hash (not just count) to detect tool set changes
+            var toolNamesHash = string.Join(",", tools.Select(t => t.Name ?? "").OrderBy(n => n)).GetHashCode(StringComparison.Ordinal);
+            var cacheKey = $"tf:{query}|{toolNamesHash}";
             if (_resultCache.TryGetValue(cacheKey, out ChatOptions? cachedOpts) && cachedOpts != null)
             {
                 var cachedClone = cachedOpts.Clone();
@@ -168,7 +170,8 @@ public sealed class ToolFilteringChatClient : IChatClient
 
         var clone = options.Clone();
         clone.Tools = selectedTools;
-        _resultCache.Set($"tf:{query}|{tools.Count}", clone, ResultCacheTtl);
+        var setKey = $"tf:{query}|{string.Join(",", selectedTools.Select(t => t.Name ?? "").OrderBy(n => n)).GetHashCode(StringComparison.Ordinal)}";
+        _resultCache.Set(setKey, clone, ResultCacheTtl);
         return clone;
     }
 
@@ -185,9 +188,11 @@ public sealed class ToolFilteringChatClient : IChatClient
     {
         var collected = new Dictionary<string, ToolRegistry.ToolDef>(StringComparer.OrdinalIgnoreCase);
         var searchQuery = userQuery;
+        var actualRounds = 0;
 
         for (int round = 0; round < maxRounds; round++)
         {
+            actualRounds = round + 1;
             var hits = await _toolRegistry.SearchTopKAsync(searchQuery, _embedder, null,
                 toolsPerRound, null, ct).ConfigureAwait(false);
 
@@ -205,7 +210,7 @@ public sealed class ToolFilteringChatClient : IChatClient
             }
         }
 
-        _proactiveHistory.Add((userQuery, collected.Count > 0 ? 1 : 0, collected.Count));
+        _proactiveHistory.Add((userQuery, actualRounds, collected.Count));
         return collected.Values.ToList();
     }
 
@@ -238,10 +243,13 @@ public sealed class ToolFilteringChatClient : IChatClient
         }
         catch
         {
-            // non-critical, best-effort
+            // LLM returned non-JSON — assume insufficient (continue searching).
+            // Previous behavior was (true, null) which prematurely terminated.
         }
 
-        return (true, null);
+        // Default: not enough — continue the retrieval loop.
+        // Previous behavior was (true, null) which prematurely terminated.
+        return (false, null);
     }
 
     private sealed record SufficiencyResult(bool Enough, string? Suggestion);
@@ -381,7 +389,8 @@ public sealed class ToolFilteringChatClient : IChatClient
         var names = new List<string>();
         foreach (var line in l3Response.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries))
         {
-            var trimmed = line.Trim().TrimStart('-', '*', ' ', '\t', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.');
+            // Trim punctuation/whitespace prefix but NOT digits (e.g. "2FAValidator" is valid)
+            var trimmed = line.Trim().TrimStart('-', '*', ' ', '\t', '.');
             if (trimmed.Length > 1 && !trimmed.Contains(' ') && !trimmed.Contains(':'))
                 names.Add(trimmed);
         }

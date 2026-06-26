@@ -7,12 +7,15 @@ namespace LTAI.Agent.CodeAnalysis;
 /// <summary>
 /// Multi-language code parser using TreeSitter.DotNet (30+ languages, native AST).
 /// Provides symbol extraction, structural outline, and node querying.
+/// Thread-safe: Parse() uses a lock to serialize access to the shared Parser instance.
 /// </summary>
 public sealed class TreeSitterParser : IDisposable
 {
     private readonly Parser _parser;
+    private readonly object _parseLock = new();
     private readonly ConcurrentDictionary<string, Language> _languages = new();
     private readonly ILogger? _logger;
+    private bool _disposed;
 
     // Language name → (native DLL, native function)
     private static readonly Dictionary<string, (string dll, string fn)> LanguageMap = new()
@@ -96,7 +99,7 @@ public sealed class TreeSitterParser : IDisposable
         return result;
     }
 
-    /// <summary>Parse source code and return the AST tree.</summary>
+    /// <summary>Parse source code and return the AST tree. Thread-safe.</summary>
     public Tree? Parse(string code, string extension)
     {
         if (!ExtToLang.TryGetValue(extension, out var langId))
@@ -105,8 +108,11 @@ public sealed class TreeSitterParser : IDisposable
         var lang = GetOrLoadLanguage(langId);
         if (lang == null) return null;
 
-        _parser.Language = lang;
-        return _parser.Parse(code);
+        lock (_parseLock)
+        {
+            _parser.Language = lang;
+            return _parser.Parse(code);
+        }
     }
 
     /// <summary>Extract symbols (declarations) from source code.</summary>
@@ -221,17 +227,18 @@ public sealed class TreeSitterParser : IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
+
         foreach (var lang in _languages.Values)
         {
-            try { lang.Dispose(); } catch
-            {
-                // non-critical, best-effort
-            }
+            try { lang.Dispose(); } catch { /* best-effort */ }
         }
         _languages.Clear();
-        try { _parser.Dispose(); } catch
-        {
-            // non-critical, best-effort
-        }
+        try { _parser.Dispose(); } catch { /* best-effort */ }
+        GC.SuppressFinalize(this);
     }
+
+    /// <summary>Finalizer: safety net for native resource cleanup if Dispose() is not called.</summary>
+    ~TreeSitterParser() => Dispose();
 }

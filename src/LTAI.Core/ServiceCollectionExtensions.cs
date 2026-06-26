@@ -19,7 +19,9 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient("safety", client => { client.Timeout = TimeSpan.FromSeconds(15); });
 
         // Validate LTAIOptions at startup (catches misconfiguration early)
-        services.AddOptions<LTAIOptions>().ValidateOnStart();
+        services.AddOptions<LTAIOptions>()
+            .BindConfiguration("LTAI")
+            .ValidateOnStart();
 
         // First Scoped service: per-request chat scope.
         // Establishes the Scoped pattern for future per-request state.

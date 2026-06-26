@@ -68,77 +68,59 @@ public sealed class L4DeepSearchProvider : AIContextProvider
             var effectiveMinSimilarity = _entropy?.GetRoomThreshold(wing)
                 ?? MinSimilarity;
 
-            // ── MeMo-inspired Multi-Turn Memory Retrieval ──
-            // Phase 1: Grounding — retrieve broad context via hybrid search
-            var groundingResults = await _store.HybridSearchAsync(queryVec, query, MaxDrawers * 3, wing)
+            // ── EvoEmbedding-inspired Single-Round Context-Aware Retrieval ──
+            // Replaces the previous 3-phase protocol (Grounding → Entity Identification → Synthesis)
+            // with a single hybrid search + temporal decay re-ranking.
+            // The key insight (arXiv:2606.21649): evolvable embeddings make simple
+            // retrieval competitive with complex multi-round protocols.
+            var rawResults = await _store.HybridSearchAsync(queryVec, query, MaxDrawers * 3, wing)
                 .ConfigureAwait(false);
 
-            // Phase 2: Entity Identification — find specific entities from grounding context
-            var entityLines = new List<string>();
-            var entityDrawers = new List<(LTAI.Agent.Memory.PalaceStore.Drawer Drawer, double Score)>();
-            foreach (var (drawer, score) in groundingResults)
-            {
-                if (score < effectiveMinSimilarity * 0.025) continue;
-
-                // Check if this entry is an entity-surfacing companion (room ends with ".entity")
-                if (drawer.Room != null && drawer.Room.EndsWith(".entity"))
+            // Context-aware re-ranking: apply temporal decay + relevance boost
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var ranked = rawResults
+                .Select(r =>
                 {
-                    entityDrawers.Add((drawer, score));
-                    continue;
-                }
+                    // Temporal decay: recent memories weighted higher (half-life = 5 min)
+                    var age = Math.Max(0, now - r.Drawer.CreatedAt);
+                    var temporalWeight = Math.Exp(-age / 300_000.0);
+                    // Importance boost for high-importance entries
+                    var importanceBoost = 1.0 + r.Drawer.Importance * 0.5;
+                    // Entity surface boost: .entity rooms contain reverse-lookup QA
+                    var entityBoost = r.Drawer.Room?.EndsWith(".entity") == true ? 1.2 : 1.0;
+                    // Combined score
+                    var combined = r.Score * temporalWeight * importanceBoost * entityBoost;
+                    return (r.Drawer, CombinedScore: combined, r.Score, TemporalWeight: temporalWeight);
+                })
+                .Where(x => x.CombinedScore >= effectiveMinSimilarity * 0.02)
+                .OrderByDescending(x => x.CombinedScore)
+                .Take(MaxDrawers * 2)
+                .ToList();
 
-                var snippet = MemoryCompressor.SmartTruncate(drawer.Content, 300);
-                var entry = $"  [{drawer.Wing}/{drawer.Room}] (rrf:{score:F3}) {snippet}";
-                if (EntityPrefixSum(entityLines) + entry.Length > MemoryBudget.L4MaxTokens * 2) break;
-                entityLines.Add(entry);
-            }
+            if (ranked.Count == 0) return new AIContext();
 
-            // Phase 3: Answer Synthesis — combine grounding + entity context
-            var lines = new List<string> { "## L4 — Deep Search (Multi-Turn)\n<memory>" };
+            var lines = new List<string> { "## L4 — Deep Search (EvoEmbedding)\n<memory>" };
             var totalLen = lines[0].Length;
 
-            // Add entity context first (from .entity rooms)
-            if (entityDrawers.Count > 0)
+            foreach (var (drawer, combinedScore, rrfScore, temporalWeight) in ranked)
             {
-                lines.Add("  ### Entity Context (Reverse Lookup)");
-                foreach (var (drawer, score) in entityDrawers.Take(3))
-                {
-                    var snippet = MemoryCompressor.SmartTruncate(drawer.Content, 200);
-                    var entry = $"  [{drawer.Wing}/{drawer.Room}] {snippet}";
-                    if (totalLen + entry.Length > MemoryBudget.L4MaxTokens * 3) break;
-                    lines.Add(entry);
-                    totalLen += entry.Length;
-                }
-                lines.Add("");
+                var tierTag = temporalWeight >= 0.8 ? "🔥" : temporalWeight >= 0.5 ? "🕐" : "📜";
+                var snippet = MemoryCompressor.SmartTruncate(drawer.Content, 300);
+                var entry = $"  {tierTag} [{drawer.Wing}/{drawer.Room}] (rrf:{rrfScore:F3} t:{temporalWeight:F2}) {snippet}";
+                if (totalLen + entry.Length > MemoryBudget.L4MaxTokens * 4) break;
+                lines.Add(entry);
+                totalLen += entry.Length;
             }
 
-            // Add grounding context
-            foreach (var line in entityLines)
-            {
-                if (totalLen + line.Length > MemoryBudget.L4MaxTokens * 4) break;
-                lines.Add(line);
-                totalLen += line.Length;
-            }
-
-            // If we had entity results, add a cross-reference synthesis note
-            if (entityDrawers.Count > 0)
-            {
-                lines.Add("");
-                lines.Add("  ### Synthesis (Forward + Reverse)");
-                lines.Add("  Memory retrieved from both forward query and reverse entity lookup.");
-            }
-
-            lines.Add("</memory>");
-
-            // Include reflection entries (MeMo-style pre-synthesized QA)
+            // Include reflection entries (pre-synthesized QA from MemoryRefinery)
             var reflections = _store.SearchByRoom("reflection")
                 .Where(d => wing == null || string.Equals(d.Wing, wing, StringComparison.OrdinalIgnoreCase))
-                .Take(3)
+                .Take(2)
                 .ToList();
 
             if (reflections.Count > 0)
             {
-                lines.Add("\n  ### Related Reflections (Pre-synthesized)");
+                lines.Add("\n  ### Related Reflections");
                 foreach (var r in reflections)
                 {
                     var snippet = MemoryCompressor.SmartTruncate(r.Content, 200);
@@ -148,10 +130,12 @@ public sealed class L4DeepSearchProvider : AIContextProvider
                 }
             }
 
+            lines.Add("</memory>");
+
             if (lines.Count == 2) return new AIContext();
 
-            _logger?.LogDebug("L4DeepSearch: {Grounding} grounding, {Entity} entity, {Reflection} reflections, ~{Tokens}t",
-                groundingResults.Count, entityDrawers.Count, reflections.Count, totalLen / 4);
+            _logger?.LogDebug("L4DeepSearch: {Count} results (single-round, temporal-decay re-ranked), ~{Tokens}t",
+                ranked.Count, totalLen / 4);
 
             var result = new AIContext
             {
@@ -168,5 +152,4 @@ public sealed class L4DeepSearchProvider : AIContextProvider
         }
     }
 
-    private static int EntityPrefixSum(List<string> lines) => lines.Sum(l => l.Length);
 }

@@ -20,6 +20,11 @@ partial class PalaceStore
     private readonly ConcurrentDictionary<string, byte> _removed = new();
     private int _hnswReady;
     private readonly SemaphoreSlim _hnswLock = new(1, 1);
+
+    // EvoEmbedding-inspired batch write buffer: prevents representation collapse
+    // by accumulating HNSW inserts and flushing in batches (segment-batching).
+    private MemoryWriteQueue? _writeQueue;
+
     private string HnswSnapshotPath => _dbPath + ".hnsw";
     private long _lastRemovedCleanupMs;
 

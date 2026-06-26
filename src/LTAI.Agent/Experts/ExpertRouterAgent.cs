@@ -83,8 +83,9 @@ public sealed class ExpertRouterAgent : DelegatingAIAgent
             return await this.InnerAgent.RunAsync(augmentedMessages, session, options, cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Trace.TraceWarning("ExpertRouterAgent: expert pipeline failed, falling back to inner agent: {0}", ex.Message);
             return await this.InnerAgent.RunAsync(messages, session, options, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -135,8 +136,9 @@ public sealed class ExpertRouterAgent : DelegatingAIAgent
 
             return AugmentMessages(msgList, aggregated.Content);
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Trace.TraceWarning("ExpertRouterAgent: DecideMessagesAsync failed, returning original messages: {0}", ex.Message);
             return msgList;
         }
     }

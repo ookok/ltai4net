@@ -18,7 +18,7 @@ public static partial class ServiceCollectionExtensions
     /// </summary>
     static IServiceCollection AddLTAIAgentPipeline(this IServiceCollection services)
     {
-        services.AddSingleton<ContextOffloader>();
+        // ContextOffloader registered in ToolAndSkillRegistration with full DI args
         services.AddSingleton<MermaidStateTracker>();
 
         // ── Pre-generation pipeline steps ──
@@ -56,6 +56,8 @@ public static partial class ServiceCollectionExtensions
         services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<DiscoursePlanningStep>());
         services.AddSingleton<RetrospectiveStep>();
         services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<RetrospectiveStep>());
+        services.AddSingleton<CriticRepairStep>();
+        services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<CriticRepairStep>());
 
         // PipelineRunner with all registered IPipelineStep instances
         services.AddSingleton<PipelineRunner>();

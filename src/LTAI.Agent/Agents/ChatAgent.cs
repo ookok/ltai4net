@@ -163,13 +163,23 @@ public sealed partial class ChatAgent
 
             if (proR.Messages != null && proText.Length > 0)
             {
-                var (hasErrors, errorMessages) = await PostGenerationGrammarCheckAsync(proR.Messages, ct).ConfigureAwait(false);
+                var (hasErrors, errorMessages, difficulty) = await PostGenerationGrammarCheckAsync(proR.Messages, ct).ConfigureAwait(false);
                 if (hasErrors && errorMessages.Count > 0 && _grammarDepth.Value <= _grammarRetryMaxDepth)
                 {
                     _grammarDepth.Value++;
-                    var retryR = await _proAgent.RunAsync(errorMessages, proSession, cancellationToken: ct).ConfigureAwait(false);
-                    var retryText = ApplyBlockedOutput(retryR.Messages?.LastOrDefault()?.Text ?? "");
-                    if (!string.IsNullOrWhiteSpace(retryText)) proText = retryText;
+                    var result = ParseGrammarCheckResult(errorMessages);
+                    var decision = _retryController.DecideWithDifficulty(result, _grammarDepth.Value, difficulty, _grammarRetryMaxDepth);
+                    if (decision.Action == RetryAction.Continue)
+                    {
+                        var retryR = await _proAgent.RunAsync(errorMessages, proSession, cancellationToken: ct).ConfigureAwait(false);
+                        var retryText = ApplyBlockedOutput(retryR.Messages?.LastOrDefault()?.Text ?? "");
+                        if (!string.IsNullOrWhiteSpace(retryText))
+                        {
+                            proText = retryText;
+                            _retryController.RecordSuccess(result.FilePath);
+                        }
+                    }
+                    _grammarDepth.Value = 0;
                 }
             }
 
@@ -189,12 +199,12 @@ public sealed partial class ChatAgent
 
         if (r.Messages != null)
         {
-            var (hasErrors, errorMessages) = await PostGenerationGrammarCheckAsync(r.Messages, ct).ConfigureAwait(false);
+            var (hasErrors, errorMessages, difficulty) = await PostGenerationGrammarCheckAsync(r.Messages, ct).ConfigureAwait(false);
             if (hasErrors && errorMessages.Count > 0)
             {
                 _grammarDepth.Value++;
                 var result = ParseGrammarCheckResult(errorMessages);
-                var decision = _retryController.Decide(result, _grammarDepth.Value);
+                var decision = _retryController.DecideWithDifficulty(result, _grammarDepth.Value, difficulty, _grammarRetryMaxDepth);
                 if (decision.Action != RetryAction.Continue)
                 {
                     RecordSessionError(sessionId);
@@ -449,22 +459,31 @@ public sealed partial class ChatAgent
 
             ctx = await _pipelineRunner.RunPostGenerationAsync(ctx).ConfigureAwait(false);
 
-            if (ctx.GrammarCheckBlocked)
+            var hasBlockers = ctx.GrammarCheckBlocked
+                || ctx.AntiPatternBlocked
+                || ctx.QualityGateBlocked
+                || ctx.DoDBlocked;
+
+            if (hasBlockers)
             {
                 var errMsgs = ctx.Messages
                     .Where(m => m.Role == ChatRole.System)
                     .ToList();
 
+                var difficulty = 0.5;
+                if (ctx.TryGet<CriticRepairState>("CriticRepairState", out var repairState) && repairState != null)
+                    difficulty = repairState.LastDifficulty;
+
                 _grammarDepth.Value++;
                 var result = ParseGrammarCheckResult(errMsgs);
-                var decision = _retryController.Decide(result, _grammarDepth.Value);
+                var decision = _retryController.DecideWithDifficulty(result, _grammarDepth.Value, difficulty, _grammarRetryMaxDepth);
                 if (decision.Action != RetryAction.Continue)
                 {
                     _grammarDepth.Value = 0;
                 }
                 else if (_grammarDepth.Value <= _grammarRetryMaxDepth && errMsgs.Count > 0)
                 {
-                    yield return new AgentResponseUpdate(ChatRole.Assistant, "\n\n🔍 检测到语法错误，正在自动修复...\n");
+                    yield return new AgentResponseUpdate(ChatRole.Assistant, "\n\n🔍 检测到质量问题，正在自动修复...\n");
                     var retryR = await _agent.RunAsync(errMsgs, session, cancellationToken: ct).ConfigureAwait(false);
                     var retryText = ApplyBlockedOutput(retryR.Messages?.LastOrDefault()?.Text ?? "");
                     if (!string.IsNullOrWhiteSpace(retryText))

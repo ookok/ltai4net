@@ -96,6 +96,8 @@ public sealed class MultiProviderChatClient : IChatClient
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
     {
         var provider = ResolveProvider(options);
+        // Clear ModelId after resolving provider to prevent downstream confusion.
+        // Intentional mutable side-effect: callers should not reuse ChatOptions across calls.
         if (options != null) options.ModelId = null;
 
         var sw = Stopwatch.StartNew();
@@ -129,6 +131,8 @@ public sealed class MultiProviderChatClient : IChatClient
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var provider = ResolveProvider(options);
+        // Clear ModelId after resolving provider to prevent downstream confusion.
+        // Intentional mutable side-effect: callers should not reuse ChatOptions across calls.
         if (options != null) options.ModelId = null;
         bool anyAttempted = false;
         string? lastFailedProvider = null;
@@ -172,7 +176,8 @@ public sealed class MultiProviderChatClient : IChatClient
             using var streamingTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             streamingTimeoutCts.CancelAfter(TimeSpan.FromSeconds(_perProviderTimeoutSec));
             var timeoutToken = streamingTimeoutCts.Token;
-            var enumerator = client.GetStreamingResponseAsync(messages, options, timeoutToken).GetAsyncEnumerator(timeoutToken);
+            var enumerable = client.GetStreamingResponseAsync(messages, options, timeoutToken);
+            var enumerator = enumerable.GetAsyncEnumerator(timeoutToken);
             await using (enumerator.ConfigureAwait(false))
             {
                 success = true;
@@ -374,27 +379,36 @@ public sealed class MultiProviderChatClient : IChatClient
     private static ChatOptions? DedupTools(ChatOptions? options)
     {
         if (options?.Tools is not { Count: > 10 }) return options;
-        var before = options.Tools.Count;
+
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Build deduplicated tool list preserving original order
         var deduped = new List<AITool>(options.Tools.Count);
-        int duplicates = 0;
         for (int i = options.Tools.Count - 1; i >= 0; i--)
         {
-            var n = options.Tools[i].Name.Trim();
-            if (seen.Add(n))
-                deduped.Add(options.Tools[i]);
-            else
-                duplicates++;
+            var tool = options.Tools[i];
+            var n = tool.Name;
+            if (n != null && seen.Add(n.Trim()))
+                deduped.Add(tool);
         }
-        if (duplicates == 0) return options;
         deduped.Reverse();
+
+        // Clone all available properties to avoid dropping AdditionalProperties (thinking, etc.)
         return new ChatOptions
         {
-            Temperature = options.Temperature,
-            MaxOutputTokens = options.MaxOutputTokens,
-            Tools = new List<AITool>(deduped),
             ModelId = options.ModelId,
+            Temperature = options.Temperature,
+            TopP = options.TopP,
+            TopK = options.TopK,
+            FrequencyPenalty = options.FrequencyPenalty,
+            PresencePenalty = options.PresencePenalty,
+            MaxOutputTokens = options.MaxOutputTokens,
             StopSequences = options.StopSequences,
+            Seed = options.Seed,
+            ResponseFormat = options.ResponseFormat,
+            ToolMode = options.ToolMode,
+            Tools = new List<AITool>(deduped),
+            AllowMultipleToolCalls = options.AllowMultipleToolCalls,
+            AdditionalProperties = options.AdditionalProperties,
         };
     }
 

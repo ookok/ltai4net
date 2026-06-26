@@ -580,7 +580,11 @@ public sealed class MainWindow : Window
             _inputHistory.ResetIndex();
             if (_streamCts != null) CancelStream();
             _streamCts = new CancellationTokenSource();
-            _ = StreamAsync(text, _streamCts.Token);
+            _ = StreamAsync(text, _streamCts.Token).ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception != null)
+                    _app.Invoke(() => AddMsg("System", $"⚠ 流错误: {t.Exception.InnerException?.Message ?? t.Exception.Message}"));
+            }, TaskScheduler.Default);
             _chatInputBar.Text = "";
             return;
         }
@@ -592,7 +596,11 @@ public sealed class MainWindow : Window
         _inputHistory.ResetIndex();
         if (_streamCts != null) CancelStream();
         _streamCts = new CancellationTokenSource();
-        _ = StreamAsync(text, _streamCts.Token);
+        _ = StreamAsync(text, _streamCts.Token).ContinueWith(t =>
+        {
+            if (t.IsFaulted && t.Exception != null)
+                _app.Invoke(() => AddMsg("System", $"⚠ 流错误: {t.Exception.InnerException?.Message ?? t.Exception.Message}"));
+        }, TaskScheduler.Default);
     }
 
     // ═══════════════════════════════════
@@ -603,6 +611,7 @@ public sealed class MainWindow : Window
     {
         try
         {
+            // Copy the last AI message to clipboard (selection-based copy not supported in Terminal.Gui Editor)
             var lastAI = _conv.LastOrDefault(m => m.StartsWith("**AI:**"));
             if (lastAI != null)
             {
@@ -1067,7 +1076,8 @@ public sealed class MainWindow : Window
                     _conv.Add(line);
                     if (_markdownCache.Length > 0) _markdownCache.Append("\n\n");
                     _markdownCache.Append(line);
-                }                UpdateMarkdown();
+                }
+                UpdateMarkdown();
                 _sidebarTokens.Text = $"消息: {_conv.Count}";
             }
         }

@@ -4,6 +4,7 @@ using LTAI.AI;
 using LTAI.Agent.Formats;
 using LTAI.Agent.FusionRoute;
 using LTAI.Agent.Pipeline;
+using LTAI.Agent.Pipeline.Steps;
 using LTAI.Core.Configuration;
 using LTAI.Core.Session;
 using Microsoft.Agents.AI;
@@ -250,27 +251,42 @@ public sealed partial class ChatAgent
         return calls;
     }
 
-    private async Task<(bool HasErrors, List<ChatMessage> ErrorMessages)> PostGenerationGrammarCheckAsync(
+    private async Task<(bool HasErrors, List<ChatMessage> ErrorMessages, double Difficulty)> PostGenerationGrammarCheckAsync(
         IList<ChatMessage> messages, CancellationToken ct)
     {
         var toolCalls = ExtractFileToolCalls(messages);
         if (toolCalls.Count == 0)
-            return (false, []);
+            return (false, [], 0);
 
         var ctx = new MessageContext("", ct);
         foreach (var (name, args, result) in toolCalls)
             ctx.ToolCalls.Add((name, args, result));
 
+        // Run full post-generation pipeline including CriticRepair
         ctx = await _pipelineRunner.RunPostGenerationAsync(ctx).ConfigureAwait(false);
 
-        if (ctx.GrammarCheckBlocked)
+        // Collect ALL blocking flags (not just GrammarCheckBlocked)
+        var hasBlockers = ctx.GrammarCheckBlocked
+            || ctx.AntiPatternBlocked
+            || ctx.QualityGateBlocked
+            || ctx.DoDBlocked;
+
+        if (hasBlockers)
         {
-            var errorMessages = ctx.Messages
+            // CriticRepairStep already synthesized repair hints into ctx.Messages
+            // as System messages. Extract them for retry feedback.
+            var repairMessages = ctx.Messages
                 .Where(m => m.Role == ChatRole.System)
                 .ToList();
-            return (true, errorMessages);
+
+            // Extract difficulty from CriticRepairState if available
+            var difficulty = 0.5; // default medium
+            if (ctx.TryGet<CriticRepairState>("CriticRepairState", out var repairState) && repairState != null)
+                difficulty = repairState.LastDifficulty;
+
+            return (true, repairMessages, difficulty);
         }
 
-        return (false, []);
+        return (false, [], 0);
     }
 }

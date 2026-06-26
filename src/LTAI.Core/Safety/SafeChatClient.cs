@@ -51,18 +51,33 @@ public sealed class SafeChatClient : IChatClient
     }
 
     /// <summary>
-    /// Intercept non-streaming response: get response from inner LLM, check safety,
-    /// and replace with refusal if unsafe.
-    /// <b>Callers:</b> MultiProviderChatClient (via IChatClient interface dispatch).
+    /// Intercept non-streaming response: get response from inner LLM, apply
+    /// KVEraser-inspired fragment scrubbing first, then full safety check.
+    /// Unsafe fragments are redacted; only fully unsafe responses are blocked.
     /// </summary>
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         CancellationToken ct = default)
     {
         var response = await _inner.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
-        var text = response.Messages?.LastOrDefault()?.Text;
+        var lastMsg = response.Messages?.LastOrDefault();
+        var text = lastMsg?.Text;
         if (string.IsNullOrEmpty(text)) return response;
 
+        // Phase 1: KVEraser fragment scrubbing (zero LLM cost)
+        var (scrubbed, fragmentsRemoved) = SafetyCoordinator.ScrubFragments(text);
+        if (fragmentsRemoved > 0)
+        {
+            _logger?.LogWarning("SafeChatClient scrubbed {Count} unsafe fragment(s) from output", fragmentsRemoved);
+            return new ChatResponse(new ChatMessage(lastMsg.Role, scrubbed)
+            {
+                AuthorName = lastMsg.AuthorName,
+                RawRepresentation = lastMsg.RawRepresentation,
+                AdditionalProperties = lastMsg.AdditionalProperties,
+            });
+        }
+
+        // Phase 2: Full safety check
         var (safe, reason) = await CheckSafetyAsync(text, ct).ConfigureAwait(false);
         if (!safe)
         {

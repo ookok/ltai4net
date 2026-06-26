@@ -59,14 +59,19 @@ partial class PalaceStore
 
         if (vec.Length == VectorQuantizer.Dim)
         {
-            await _hnswLock.WaitAsync().ConfigureAwait(false);
-            try
+            if (_writeQueue != null)
+                _writeQueue.Enqueue(vec, drawerId);
+            else
             {
-                var idx = _hnsw.Insert(vec);
-                _hnswMap[idx] = drawerId;
-                _hnswRev[drawerId] = idx;
+                await _hnswLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    var idx = _hnsw.Insert(vec);
+                    _hnswMap[idx] = drawerId;
+                    _hnswRev[drawerId] = idx;
+                }
+                finally { _hnswLock.Release(); }
             }
-            finally { _hnswLock.Release(); }
         }
 
         var currentCount = await CountAsync().ConfigureAwait(false);

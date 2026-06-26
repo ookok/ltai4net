@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using LTAI.Core.Configuration;
 
 namespace LTAI.Agent.Tools;
 
@@ -24,7 +25,7 @@ public sealed class Long2ShortTracker
             var oldest = _stats.Keys.FirstOrDefault();
             if (oldest != null) _stats.TryRemove(oldest, out _);
         }
-        var tokens = output.Length / 4;
+        var tokens = TokenEstimator.Estimate(output); // CJK-aware
         var stat = _stats.GetOrAdd(toolName, _ => new ToolOutputStats());
         stat.AddSample(tokens, success);
     }
@@ -49,7 +50,7 @@ public sealed class Long2ShortTracker
         var avg = GetAverageLength(toolName);
         if (avg <= 0) return 0;
 
-        var currentTokens = currentOutput.Length / 4;
+        var currentTokens = TokenEstimator.Estimate(currentOutput);
         var diff = avg - currentTokens;
 
         if (avg == 0) return 0;

@@ -70,13 +70,20 @@ public static partial class ServiceCollectionExtensions
         services.AddSingleton<CodeChunkIndex>(sp =>
         {
             var store = sp.GetRequiredService<KgStore>();
-            var parser = new TreeSitterParser(
-                sp.GetService<ILogger<TreeSitterParser>>());
+            var parser = sp.GetRequiredService<TreeSitterParser>();
             return new CodeChunkIndex(store, parser,
                 sp.GetService<EmbeddingClient>(),
                 sp.GetService<ILogger<CodeChunkIndex>>(),
                 Directory.GetCurrentDirectory());
         });
+
+        // Wasmtime sandbox: WASM-based code execution (shared Singleton to avoid native engine leak)
+        services.AddSingleton<WasmtimeSandbox>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<WasmtimeSandbox>();
+            return new WasmtimeSandbox(Directory.GetCurrentDirectory(), logger);
+        });
+
         services.AddSingleton<FailureMiner>();
 
         // User-facing tools

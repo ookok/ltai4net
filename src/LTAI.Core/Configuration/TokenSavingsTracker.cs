@@ -82,11 +82,11 @@ public static class TokenSavingsTracker
             if (File.Exists(filePath))
             {
                 var content = File.ReadAllText(filePath);
-                naiveTokens = content.Length / 4; // ~4 chars per token
+                naiveTokens = TokenEstimator.Estimate(content); // CJK-aware
             }
             else
             {
-                naiveTokens = 500; // default estimate for unknown files
+                naiveTokens = 500;
             }
         }
         catch
@@ -94,7 +94,7 @@ public static class TokenSavingsTracker
             naiveTokens = 500;
         }
 
-        var actualTokens = Math.Max(1, toolOutput.Length / 4);
+        var actualTokens = Math.Max(1, TokenEstimator.Estimate(toolOutput));
         RecordLookup((int)Math.Min(naiveTokens, int.MaxValue), (int)Math.Min(actualTokens, int.MaxValue));
     }
 
