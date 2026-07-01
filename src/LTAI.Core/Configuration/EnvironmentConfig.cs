@@ -76,6 +76,25 @@ public static class EnvironmentConfig
     public static int MemorySummarizeMaxPerCycle => Overrides?.MemorySummarizeMaxPerCycle ?? ReadEnvInt("LTAI_MEMORY_SUMMARIZE_MAX_PER_CYCLE", 10);
     public static int ContrastiveFeedbackMax => Overrides?.ContrastiveFeedbackMax ?? ReadEnvInt("LTAI_CONTRASTIVE_FEEDBACK_MAX", 5000);
 
+    // ── Agentic Abstention & Self-Refine ──
+    public static int SelfRefineMaxIter => Overrides?.SelfRefineMaxIter ?? ReadEnvInt("LTAI_SELF_REFINE_MAX_ITER", 2);
+
+    // ── DFSD Tool Executor ──
+    public static int DfsdMaxDepth => Overrides?.DfsdMaxDepth ?? ReadEnvInt("LTAI_DFSD_MAX_DEPTH", 5);
+    public static int DfsdMaxNodes => Overrides?.DfsdMaxNodes ?? ReadEnvInt("LTAI_DFSD_MAX_NODES", 20);
+
+    // ── Reflection ──
+    public static int ReflectionTopK => Overrides?.ReflectionTopK ?? ReadEnvInt("LTAI_REFLECTION_TOP_K", 3);
+
+    // ── ToolEval ──
+    public static double ToolEvalPassThreshold => Overrides?.ToolEvalPassThreshold ?? (double.TryParse(Environment.GetEnvironmentVariable("LTAI_TOOL_EVAL_PASS_THRESHOLD"), out var v) ? v : 0.65);
+
+    // ── ReWOO ──
+    public static bool ReWooEnabled => Overrides?.ReWooEnabled ?? string.Equals(Environment.GetEnvironmentVariable("LTAI_REWOO_ENABLED"), "true", StringComparison.OrdinalIgnoreCase);
+
+    // ── MoA ──
+    public static int MoaDiversityMinProviders => Overrides?.MoaDiversityMinProviders ?? ReadEnvInt("LTAI_MOA_DIVERSITY_MIN_PROVIDERS", 2);
+
     private static int ReadEnvInt(string key, int fallback)
     {
         var raw = Environment.GetEnvironmentVariable(key);
@@ -153,4 +172,12 @@ public sealed class EnvironmentOverrides
     public int? RateLimitWindowSec { get; init; }
     public int? MemorySummarizeMaxPerCycle { get; init; }
     public int? ContrastiveFeedbackMax { get; init; }
+
+    public int? SelfRefineMaxIter { get; init; }
+    public int? DfsdMaxDepth { get; init; }
+    public int? DfsdMaxNodes { get; init; }
+    public int? ReflectionTopK { get; init; }
+    public double? ToolEvalPassThreshold { get; init; }
+    public bool? ReWooEnabled { get; init; }
+    public int? MoaDiversityMinProviders { get; init; }
 }

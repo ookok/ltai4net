@@ -701,3 +701,156 @@ await store.PurgeExpiredAsync();
 - `HybridSearchAsync` SQL 级 scope 过滤：`(scope='shared' OR (scope='private' AND principal=@p))`
 - `MemoryAuthorityProvider` 注入访问控制 + 遗忘规则到 AI context
 - `MemoryStore.SearchFactsAsync` 按 `MemoryFilter.Principal`/`Scope` 自动过滤
+
+## Agentic Abstention（arXiv 2606.28733 CONVOLVE）
+
+`AbstentionCheckStep`（`src/LTAI.Agent/Pipeline/Steps/AbstentionCheckStep.cs`）在管线并行组 4 运行，使用 CONVOLVE 风格 6 条停止规则：
+
+| 规则 | 条件 | 示例 |
+|------|------|------|
+| R1 重复调用 | 连续 ≥2 次相同工具+参数 | `ReadFileContent(path=X) → ReadFileContent(path=X)` |
+| R2 空结果 | 连续 ≥3 次返回空 | 所有工具输出空白 |
+| R3 连续错误 | 连续 ≥2 次含 error/exception/failed | 工具调用全部失败 |
+| R4 文件循环 | 同一文件读 ≥4 次未写 | 只读不写 |
+| R5 工具单一 | 某工具占比 ≥70% 且 ≤2 种类型 | 90% 调用是 `ReadFileContent` |
+| R6 管线错误 | `PipelineError` 非空 | 上游步骤异常 |
+
+阻断时设置 `AbstentionBlocked` 标志，添加系统消息列出触发规则。`CriticRepairStep` 可从中提取信息进行修复。
+
+## Reflexion + Self-Refine（NeurIPS 2023 + Madaan et al. 2023）
+
+两个互补的自省层，在管线组 5（AlwaysRun CriticRepair 之后）执行：
+
+### Self-Refine（单轮内迭代改进）
+
+| 组件 | 文件 | 说明 |
+|------|------|------|
+| `SelfCritiqueGenerator` | `src/LTAI.Agent/Learning/SelfCritiqueGenerator.cs` | LLM 自批评：按 Completeness/Hallucination/Clarity/Verbosity/ToolUsage 五维度输出 critique |
+| `SelfRefineStep` | `src/LTAI.Agent/Pipeline/Steps/SelfRefineStep.cs` | 管线步骤，调用 Generator → 若存在严重问题 → 调用 LLM 精炼 → 替换响应。默认 2 轮迭代 |
+
+管线位置：`CriticRepair(alwaysRun) → SelfRefine → SelfReflection → Retrospective`
+
+### Reflexion（跨会话经验记忆）
+
+| 组件 | 文件 | 说明 |
+|------|------|------|
+| `ReflectionGenerator` | `src/LTAI.Agent/Learning/ReflectionGenerator.cs` | LLM 生成结构化的因果/纠正/预防三部反思 |
+| `ReflectionStore` | `src/LTAI.Agent/Memory/ReflectionStore.cs` | PalaceStore 封装，向量+关键词双路检索 |
+| `SelfReflectionStep` | `src/LTAI.Agent/Pipeline/Steps/SelfReflectionStep.cs` | 管线阻断时生成反思并持久化 |
+| `ReflectionAugmentedStep` | `src/LTAI.Agent/Pipeline/Steps/ReflectionAugmentedStep.cs` | 预生成管线步骤，检索相关反思注入 system message |
+
+反思格式：
+```
+## Causal Reflection
+我失败是因为调用了 ReadFileContent 在文件夹而非文件上
+## Corrective Strategy
+下次应先调用 Glob 确认文件存在再读
+## Preventive Guideline
+所有文件操作前应先检查路径合法性
+```
+
+## ReWOO（Reasoning WithOut Observation, arXiv 2305.14229）
+
+`ReWOOPlanningChatClient`（`src/LTAI.AI/ReWOOPlanningChatClient.cs`）将标准 ReAct 模式压缩为 2 次 LLM 调用：
+
+1. **Planner**（L2 模型）：生成 `#E[N] ToolName(arg=val)` 格式的计划
+2. **Worker**：机械执行所有工具，无 LLM 调用，占位符替换为观测结果
+3. **Solver**（L3 模型）：一份完整上下文 + 所有观测 → 最终答案
+
+通过 `LTAI_REWOO_ENABLED` 环境变量启用（默认 false）。`ReWOOPlanningChatClient` 继承 `DelegatingChatClient`，作为 IChatClient 中间件在 `ServiceCollectionExtensions.cs` 以 keyed service `"rewoo"` 注册。
+
+**集成点：** MoA proposer 在 ReWOO 启用时自动用 ReWOO 包裹各自 client，实现 proposer 内嵌 planner→worker→solver：
+
+```
+MoA Layer 0: proposer[0]=ReWOO(l2) → proposer[1]=ReWOO(siliconflow) → proposer[2]=ReWOO(openrouter)
+```
+通过 `EnvironmentConfig.MoaDiversityMinProviders`（默认 2）保证 proposer 来源多样。
+
+## DFSDTool（ToolLLM 深度优先决策树, arXiv 2305.14229）
+
+`DFSDToolExecutor`（`src/LTAI.Agent/Execution/DFSDToolExecutor.cs`）实现深度优先搜索的决策树多工具执行器：
+
+| 参数 | 默认值 | 环境变量 |
+|------|--------|----------|
+| `maxDepth` | 5 | `LTAI_DFSD_MAX_DEPTH` |
+| `maxNodes` | 20 | `LTAI_DFSD_MAX_NODES` |
+
+算法：
+1. `ThinkAndActAsync` — LLM 决定下一步：`TOOL: Name(arg)` / `FINAL: answer` / `ABANDON`
+2. `ExecuteActionAsync` — 通过 `IToolRegistry.InvokeToolAsync` 实际调用工具
+3. 失败时回溯（DFS 栈回溯）
+4. 重复直到 `maxDepth` / `maxNodes` 或找到最终答案
+
+注册为 `IToolRegistry` 即可被 pipeline 使用。
+
+## SWE-agent CodeRepairAci（Yang et al. 2024）
+
+`CodeRepairAci`（`src/LTAI.Agent/Tools/CodeRepairAci.cs`）提供 SWE-agent 风格的 curated 代码修复动作空间：
+
+```
+view_file(path, start?, end?)   — 安全读取文件，自动行号引用
+search_symbol(query)             — 使用 CgGraph 语义搜索
+edit_lines(path, start, end, replacement) — 行号精确编辑
+run_tests(filter?)               — 测试执行 + 结果解析
+submit()                          — 标记修复完成
+```
+
+通过 `SafeShellTool` 包装 shell 执行，结果记录通过 `ToolRegistry` 的 BM25+向量 RRF 检索机制暴露给 agent。
+
+## RepoCoder GenerationOrderStep（RepoCoder 启发）
+
+`GenerationOrderStep`（`src/LTAI.Agent/Pipeline/Steps/GenerationOrderStep.cs`）在代码生成前执行拓扑排序，注入依赖顺序计划：
+
+1. 使用 `ReachIndex.QueryImpact(symId, depth: 3)` 获取前向/反向可达符号
+2. 构建依赖图后拓扑排序（基类 → 派生类，接口 → 实现）
+3. 输出到 system message 供 LLM 参考
+
+注入 `CgGraph`（通过 `CgGraph` 新增 `ResolveSymbolIdsAsync` 方法）做语义名称→ID 解析，替代原始哈希映射。
+
+## ToolEvalStep（ToolLLM ToolEval 启发）
+
+`ToolEvalStep`（`src/LTAI.Agent/Pipeline/Steps/ToolEvalStep.cs`）在管线并行组 4 运行，评估工具使用质量的 4 维度：
+
+| 维度 | 权重 | 说明 |
+|------|------|------|
+| PassRate | 1.0 | 工具调用成功率 |
+| ChainCompleteness | 0.8 | 不同类型工具数量 vs 总调用数的比例 |
+| ArgumentQuality | 0.6 | 参数非空/有意义的比例 |
+| Efficiency | 0.6 | 同一工具过度调用惩罚 |
+
+未通过时设置 `QualityGateBlocked`，添加评估报告系统消息。通过阈值由 `LTAI_TOOL_EVAL_PASS_THRESHOLD` 控制（默认 0.65）。
+
+## 更新后的 Pipeline 架构
+
+### 执行顺序（加粗为新增）
+
+```
+Pre:  LoraAdapter → MemoryCaching(Restore) → ReflectionAugmented → RagContext
+      → ProgressGuard → ProactiveSuggest → SafetyCheck → Router → ToolExecution
+Post: DeltaAnchor → MemoryCaching(Save) → Compaction → DiscoursePlanning
+      → Parallel{GrammarCheck, AntiPatternCheck, QualityGate, DoDCheck, ThinkingTag, **AbstentionCheck, ToolEval**}
+      → CriticRepair → **SelfRefine → SelfReflection** → Retrospective
+```
+
+### 阻断链（更新）
+
+| 标志 | 来源步骤 | 效果 |
+|------|---------|------|
+| `SafetyBlocked` | SafetyCheckStep | 安全拦截 |
+| `GrammarCheckBlocked` | GrammarCheckStep | 语法错误，自动重试 |
+| `AntiPatternBlocked` | AntiPatternCheckStep | 反模式注入修复指引 |
+| `QualityGateBlocked` | QualityGateStep / ToolEvalStep | 质量门禁 |
+| `DoDBlocked` | DoDCheckStep | DoD 检查失败 |
+| `AbstentionBlocked` | AbstentionCheckStep | CONVOLVE 停止规则触发 |
+
+## 环境变量（新增）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LTAI_REWOO_ENABLED` | false | 启用 ReWOO 规划模式 |
+| `LTAI_SELF_REFINE_MAX_ITER` | 2 | SelfRefineStep 最大迭代轮数 |
+| `LTAI_DFSD_MAX_DEPTH` | 5 | DFSDToolExecutor 最大搜索深度 |
+| `LTAI_DFSD_MAX_NODES` | 20 | DFSDToolExecutor 最大节点数 |
+| `LTAI_REFLECTION_TOP_K` | 3 | ReflectionStore 检索返回条数 |
+| `LTAI_TOOL_EVAL_PASS_THRESHOLD` | 0.65 | ToolEvalStep 通过阈值 |
+| `LTAI_MOA_DIVERSITY_MIN_PROVIDERS` | 2 | MoA proposer 最小来源 provider 数 |

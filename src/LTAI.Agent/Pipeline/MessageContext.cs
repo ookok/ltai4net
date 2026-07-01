@@ -137,6 +137,9 @@ public sealed class MessageContext
     /// <summary>Definition of Done check failed (DoDCheckStep).</summary>
     public bool DoDBlocked { get; set; }
 
+    /// <summary>Agentic Abstention triggered (AbstentionCheckStep).</summary>
+    public bool AbstentionBlocked { get; set; }
+
     /// <summary>Last pipeline step error message.</summary>
     public string? PipelineError { get; set; }
 

@@ -69,20 +69,42 @@ public static partial class ServiceCollectionExtensions
             var proposerCount = Math.Max(1, opts.MoaProposerCount);
             var aggregatorCount = Math.Max(1, opts.MoaAggregatorCount);
             var logger = sp.GetRequiredService<ILogger<MoAWorkflow>>();
+            var registry = sp.GetRequiredService<ProviderRegistry>();
+            var useReWoo = LTAI.Core.Configuration.EnvironmentConfig.ReWooEnabled;
 
             var clientKeys = new[] { "l2", "l2-alt", "l2-extra", "l3" };
             var proposers = new List<IChatClient>();
-            for (int i = 0; i < proposerCount; i++)
+
+            foreach (var provider in registry.ActiveProviders.Take(proposerCount))
             {
-                var key = i < clientKeys.Length ? clientKeys[i] : "l2";
-                var client = sp.GetKeyedService<IChatClient>(key);
-                if (client != null) proposers.Add(client);
+                try
+                {
+                    var model = provider.Models.FirstOrDefault(m => m.ToolCall)?.ShortId
+                        ?? provider.Models.FirstOrDefault()?.ShortId;
+                    if (model == null) continue;
+                    var apiKey = SecretManager.Get(provider.EnvVar) ?? "";
+                    if (string.IsNullOrEmpty(apiKey)) continue;
+                    var client = OpenAIChatClientFactory.Create(provider.Endpoint!, model, apiKey);
+                    proposers.Add(WrapWithReWooIfEnabled(sp, client, useReWoo));
+                    logger.LogDebug("MoA proposer from provider '{P}' model '{M}'", provider.Name, model);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "MoA: failed to create proposer from provider '{P}'", provider.Name);
+                }
             }
+
+            for (int i = 0; proposers.Count < proposerCount && i < clientKeys.Length; i++)
+            {
+                var client = sp.GetKeyedService<IChatClient>(clientKeys[i]);
+                if (client != null) proposers.Add(WrapWithReWooIfEnabled(sp, client, useReWoo));
+            }
+
             if (proposers.Count == 0)
             {
                 var fallback = sp.GetKeyedService<IChatClient>("l2");
                 if (fallback != null)
-                    proposers = Enumerable.Repeat(fallback, proposerCount).ToList()!;
+                    proposers = [WrapWithReWooIfEnabled(sp, fallback, useReWoo)];
             }
 
             var aggregators = new List<IChatClient>();
@@ -101,7 +123,10 @@ public static partial class ServiceCollectionExtensions
 
             if (proposers.Distinct().Count() == 1 && proposerCount > 1)
                 logger.LogWarning("MoA: all proposers use the same IChatClient instance — proposals will not be diverse. " +
-                    "Configure multiple L2 backends (l2/l2-alt/l3) for effective MoA.");
+                    "Configure multiple providers with API keys for effective MoA.");
+
+            if (useReWoo && proposers.Count > 0)
+                logger.LogInformation("MoA: ReWOO planning enabled for all {Count} proposers", proposers.Count);
 
             return new MoAWorkflow(proposers, aggregators, logger,
                 opts.MoaTimeoutSeconds > 0 ? TimeSpan.FromSeconds(opts.MoaTimeoutSeconds) : null);
@@ -173,6 +198,37 @@ public static partial class ServiceCollectionExtensions
         services.AddSingleton<BackgroundJobService>();
         services.AddSingleton<Mcp.McpClientFactory>();
 
+        services.AddSingleton<Learning.SelfCritiqueGenerator>(sp =>
+        {
+            var steer = sp.GetKeyedService<IChatClient>("steer");
+            return new Learning.SelfCritiqueGenerator(steer, sp.GetService<ILogger<Learning.SelfCritiqueGenerator>>());
+        });
+
+        services.AddSingleton<Learning.ReflectionGenerator>(sp =>
+        {
+            var steer = sp.GetKeyedService<IChatClient>("steer");
+            return new Learning.ReflectionGenerator(steer, sp.GetService<ILogger<Learning.ReflectionGenerator>>());
+        });
+
+        services.AddSingleton<Memory.ReflectionStore>(sp =>
+        {
+            var palace = sp.GetRequiredService<PalaceStore>();
+            var embedder = sp.GetService<EmbeddingClient>();
+            var mstore = sp.GetService<MemoryStore>();
+            var logger = sp.GetService<ILogger<Memory.ReflectionStore>>();
+            return new Memory.ReflectionStore(palace, embedder, mstore, logger);
+        });
+
+        services.AddSingleton<Execution.DFSDToolExecutor>(sp =>
+        {
+            var steer = sp.GetKeyedService<IChatClient>("steer");
+            var registry = sp.GetRequiredService<IToolRegistry>();
+            return new Execution.DFSDToolExecutor(
+                registry, steer, sp.GetService<ILogger<Execution.DFSDToolExecutor>>());
+        });
+
+        services.AddSingleton<Tools.CodeRepairAci>();
+
         services.AddSingleton<Tasks.TaskQueue>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
@@ -181,5 +237,14 @@ public static partial class ServiceCollectionExtensions
         });
 
         return services;
+    }
+
+    private static IChatClient WrapWithReWooIfEnabled(IServiceProvider sp, IChatClient inner, bool enabled)
+    {
+        if (!enabled) return inner;
+        var planner = sp.GetKeyedService<IChatClient>("l2");
+        var toolReg = sp.GetRequiredService<IToolRegistry>();
+        return new ReWOOPlanningChatClient(inner, planner, inner,
+            sp.GetService<ILogger<ReWOOPlanningChatClient>>(), toolReg);
     }
 }

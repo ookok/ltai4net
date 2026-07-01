@@ -148,7 +148,17 @@ public sealed class CompactionStep : IPipelineStep
         var traceId = context.TraceId ?? Guid.NewGuid().ToString("N")[..12];
         var beforeSnapshot = context.Messages.Select(m => new ChatMessage(m.Role, m.Text ?? "") { AuthorName = m.AuthorName }).ToList();
 
-        // ── Phase A: Tool trace offload + predictive tracking ──
+        // ── Phase A: Compute adaptive thresholds + tool trace offload ──
+        if (_offloader != null)
+        {
+            var msgCount = context.Messages.Count;
+            var estTokens = context.Messages.Sum(m => TokenEstimator.Estimate(m.Text ?? ""));
+            _offloader.ComputeDynamicThresholds(
+                context.AggressivenessMultiplier,
+                context.CompactionPressure,
+                msgCount,
+                estTokens);
+        }
         await OffloadToolTracesAsync(context);
 
         // ── Phase 0: Load config thresholds ──

@@ -210,6 +210,14 @@ public static class ServiceCollectionExtensions
                     var edgeClient = OpenAIChatClientFactory.Create(edge.Endpoint!, edgeModel, "");
                     router.RegisterEdge(edge.Id, edgeClient);
                     logger?.LogInformation("Edge: {Name}/{Model} @ {Endpoint}", edge.Name, edgeModel, edge.Endpoint);
+
+                    // Register KV cache per-request params if supported
+                    if (edge.KvCache is { PerRequestSupported: true, PerRequestParams: { } kvParams })
+                    {
+                        router.RegisterKvCacheConfig(edge.Id, kvParams);
+                        logger?.LogInformation("Edge {Name}: KV cache per-request params registered ({Count} params)",
+                            edge.Name, kvParams.Count);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -230,6 +238,16 @@ public static class ServiceCollectionExtensions
         {
             var router = sp.GetRequiredService<MultiProviderChatClient>();
             return router.GetL2Client();
+        });
+
+        services.AddKeyedSingleton<IChatClient>("rewoo", (sp, _) =>
+        {
+            var inner = sp.GetRequiredService<IChatClient>();
+            var planner = sp.GetKeyedService<IChatClient>("l2");
+            var solver = sp.GetKeyedService<IChatClient>("l3") ?? inner;
+            var registry = sp.GetRequiredService<IToolRegistry>();
+            return new ReWOOPlanningChatClient(inner, planner, solver,
+                sp.GetService<ILogger<ReWOOPlanningChatClient>>(), registry);
         });
 
         services.AddSingleton<IChatClient>(sp =>

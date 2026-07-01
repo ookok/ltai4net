@@ -98,7 +98,12 @@ public sealed class WebTools
             if (apiResult != null)
                 return apiResult;
 
-            // 3. Fallback to scraping-based engines
+            // 3. Try Firecrawl search as fallback
+            var fcResult = await TryFirecrawlSearchAsync(http, finalQuery, topK).ConfigureAwait(false);
+            if (fcResult != null)
+                return fcResult;
+
+            // 4. Fallback to scraping-based engines
             var engines = (region.ToLowerInvariant()) switch
             {
                 "cn" => AllEngines.Where(e => e.Region == "cn").ToArray(),
@@ -269,6 +274,83 @@ public sealed class WebTools
         return null;
     }
 
+    // ── Firecrawl API (v2) ──────────────────────────────────────────
+
+    private async Task<string?> TryFirecrawlSearchAsync(HttpClient http, string query, int topK)
+    {
+        var fcKey = SecretManager.Get("FIRECRAWL_API_KEY");
+        if (string.IsNullOrEmpty(fcKey)) return null;
+
+        var baseUrl = SecretManager.Get("FIRECRAWL_BASE_URL") ?? "https://api.firecrawl.dev/v2";
+
+        try
+        {
+            var body = JsonSerializer.Serialize(new { query, limit = topK });
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/search");
+            req.Headers.Add("Authorization", $"Bearer {fcKey}");
+            req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var resp = await http.SendAsync(req).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("data", out var data)) return null;
+            if (!data.TryGetProperty("web", out var web)) return null;
+
+            var sb = new StringBuilder();
+            sb.AppendLine("**Firecrawl Search**");
+            foreach (var r in web.EnumerateArray().Take(topK))
+            {
+                var title = r.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+                var link = r.TryGetProperty("url", out var u) ? u.GetString() ?? "" : "";
+                var desc = r.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
+                sb.AppendLine($"- [{title}]({link})");
+                if (!string.IsNullOrWhiteSpace(desc)) sb.AppendLine($"  {desc}");
+                sb.AppendLine();
+            }
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Firecrawl search failed");
+            return null;
+        }
+    }
+
+    private async Task<string?> TryFirecrawlScrapeAsync(string url, int maxChars, CancellationToken ct)
+    {
+        var fcKey = SecretManager.Get("FIRECRAWL_API_KEY");
+        if (string.IsNullOrEmpty(fcKey)) return null;
+
+        var baseUrl = SecretManager.Get("FIRECRAWL_BASE_URL") ?? "https://api.firecrawl.dev/v2";
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+            var http = _httpFactory.CreateClient();
+            var body = JsonSerializer.Serialize(new { url, formats = new[] { "markdown" } });
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/scrape");
+            req.Headers.Add("Authorization", $"Bearer {fcKey}");
+            req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var resp = await http.SendAsync(req, cts.Token).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return null;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("data", out var data)) return null;
+            if (!data.TryGetProperty("markdown", out var md)) return null;
+            var text = md.GetString() ?? "";
+            if (text.Length > maxChars)
+                text = ContentTruncator.Truncate(text, maxChars);
+            return text;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Firecrawl scrape failed for {Url}", url);
+            return null;
+        }
+    }
+
     private async Task<string?> TryFetchHtmlAsync(HttpClient http, string url)
     {
         try
@@ -348,6 +430,15 @@ public sealed class WebTools
 
         try
         {
+            // Try Firecrawl scrape first for better JS-rendered content
+            var fcKey = SecretManager.Get("FIRECRAWL_API_KEY");
+            if (!string.IsNullOrEmpty(fcKey))
+            {
+                var fcResult = await TryFirecrawlScrapeAsync(url, maxChars, ct).ConfigureAwait(false);
+                if (fcResult != null)
+                    return fcResult;
+            }
+
             var http = _httpFactory.CreateClient();
             http.Timeout = TimeSpan.FromSeconds(30);
             http.MaxResponseContentBufferSize = Math.Min(maxChars * 2, 1024 * 1024);

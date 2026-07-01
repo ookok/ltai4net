@@ -140,6 +140,28 @@ public sealed record ModelInfo(
 }
 
 /// <summary>
+/// KV cache configuration for local inference engines (edge providers).
+/// Contains engine-specific parameters for KV cache quantization and management.
+/// </summary>
+/// <param name="Engine">Inference engine name (ollama, llamacpp, vllm, etc.).</param>
+/// <param name="Description">Human-readable description of the KV cache setup.</param>
+/// <param name="ServerArgs">Server launch arguments for KV cache configuration.</param>
+/// <param name="EnvVar">Environment variable name (e.g. OLLAMA_KV_CACHE_TYPE).</param>
+/// <param name="Recommended">Recommended value for the env var or setting.</param>
+/// <param name="Params">All KV cache parameter key-value pairs.</param>
+/// <param name="PerRequestSupported">Whether KV cache can be tuned per API request.</param>
+/// <param name="PerRequestParams">Per-request KV cache parameters (for engines that support it).</param>
+public sealed record KvCacheConfig(
+    string? Engine,
+    string? Description,
+    string? ServerArgs,
+    string? EnvVar,
+    string? Recommended,
+    IReadOnlyDictionary<string, object>? Params,
+    bool PerRequestSupported,
+    IReadOnlyDictionary<string, object>? PerRequestParams);
+
+/// <summary>
 /// Full provider metadata sourced from models.dev, merged with LTAI local supplements.
 /// </summary>
 /// <param name="Id">Provider ID, e.g. "deepseek".</param>
@@ -151,6 +173,7 @@ public sealed record ModelInfo(
 /// <param name="KeyUrl">API key management URL (LTAI local supplement).</param>
 /// <param name="Models">All models offered by this provider.</param>
 /// <param name="FetchedAt">When this data was last fetched from models.dev.</param>
+/// <param name="KvCache">KV cache configuration (edge providers only).</param>
 public sealed record ProviderInfo(
     string Id,
     string Name,
@@ -160,7 +183,8 @@ public sealed record ProviderInfo(
     string? DocUrl,
     string? KeyUrl,
     ModelInfo[] Models,
-    DateTime FetchedAt)
+    DateTime FetchedAt,
+    KvCacheConfig? KvCache = null)
 {
     /// <summary>Primary env var name (first in the array).</summary>
     [JsonIgnore]

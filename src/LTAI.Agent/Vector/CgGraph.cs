@@ -354,6 +354,35 @@ public sealed class CgGraph : AIContextProvider, IDisposable
         return result;
     }
 
+    /// <summary>Get a node by its ID.</summary>
+    public async Task<NodeRow?> GetNodeAsync(long id)
+    {
+        if (_store == null) return null;
+        try { return await _store.GetNode(id).ConfigureAwait(false); }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Resolve a symbol name to matching node IDs using the code graph.
+    /// Used by GenerationOrderStep for dependency-aware topological sorting.
+    /// </summary>
+    public async Task<List<long>> ResolveSymbolIdsAsync(string symbolName, int limit = 5)
+    {
+        if (!_built || _store == null) return [];
+        try
+        {
+            var nodes = await _store.SearchNodesByName(symbolName, limit).ConfigureAwait(false);
+            return nodes.Where(n => n.Name.Equals(symbolName, StringComparison.OrdinalIgnoreCase))
+                .Select(n => n.Id)
+                .Distinct()
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
     // ═══════════════════════════════════════════
     //  Query
     // ═══════════════════════════════════════════

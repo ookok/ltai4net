@@ -38,6 +38,12 @@ public interface IToolRegistry
     /// <summary>Get tools by domain.</summary>
     IReadOnlyList<ToolRegistry.ToolDef> GetToolsByDomain(string domain);
 
+    /// <summary>Get an AIFunction by tool name.</summary>
+    AIFunction? GetToolByName(string name);
+
+    /// <summary>Invoke a tool by name with argument dictionary and return result string.</summary>
+    Task<string?> InvokeToolAsync(string name, Dictionary<string, object?> args, CancellationToken ct = default);
+
     /// <summary>Clear the registry (for testing or reload).</summary>
     void Clear();
 

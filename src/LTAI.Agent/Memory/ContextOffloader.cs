@@ -37,6 +37,16 @@ public sealed record OffloadSummary
 }
 
 /// <summary>
+/// Runtime-adaptive thresholds for offloading decisions.
+/// </summary>
+public sealed record AdaptiveThresholds
+{
+    public int MaxInlineBytes { get; init; } = 1024;
+    public int MaxInlineLines { get; init; } = 40;
+    public int MaxInlineChars { get; init; } = 2048;
+}
+
+/// <summary>
 /// Offloads heavy tool execution traces to <c>.livingtree/refs/</c> files,
 /// replacing them with lightweight <c>[refs/{filename}#{hash}]</c> references.
 /// Provides lossless drill-down: Mermaid state diagram → refs index → full text.
@@ -49,6 +59,8 @@ public sealed partial class ContextOffloader
     private readonly PredictiveOffloadTracker? _predictiveTracker;
     private readonly Context.SemanticCompressor? _semanticCompressor;
     private static readonly ConcurrentDictionary<string, int> s_toolHistory = new(StringComparer.OrdinalIgnoreCase);
+
+    private AdaptiveThresholds _currentThresholds = new();
 
     public const int MaxInlineBytes = 1024;
     public const int MaxInlineLines = 40;
@@ -68,6 +80,43 @@ public sealed partial class ContextOffloader
         _refsDir = Path.Combine(baseDir, ".livingtree", "refs");
         Directory.CreateDirectory(_refsDir);
     }
+
+    /// <summary>
+    /// Compute adaptive thresholds from context signals.
+    /// Higher aggressivenessMultiplier → lower thresholds (more aggressive offload).
+    /// </summary>
+    public AdaptiveThresholds ComputeDynamicThresholds(
+        double aggressivenessMultiplier,
+        int compactionPressure,
+        int messageCount,
+        int estimatedTokens)
+    {
+        var scale = aggressivenessMultiplier;
+        if (compactionPressure > 5) scale *= 1.4;
+        else if (compactionPressure > 2) scale *= 1.15;
+        if (messageCount > 50) scale *= 1.2;
+        if (messageCount > 100) scale *= 1.4;
+        if (estimatedTokens > 100_000) scale *= 1.25;
+        if (estimatedTokens > 200_000) scale *= 1.5;
+        scale = Math.Clamp(scale, 0.4, 2.5);
+
+        _currentThresholds = new AdaptiveThresholds
+        {
+            MaxInlineBytes = (int)(MaxInlineBytes / scale),
+            MaxInlineLines = (int)(MaxInlineLines / scale),
+            MaxInlineChars = (int)(MaxInlineChars / scale),
+        };
+        return _currentThresholds;
+    }
+
+    /// <summary>Reset thresholds to static defaults.</summary>
+    public void ResetThresholds() => _currentThresholds = new();
+
+    /// <summary>Instance-level ShouldOffload using current adaptive thresholds.</summary>
+    public bool ShouldOffloadAdaptive(string content) =>
+        content.Length > _currentThresholds.MaxInlineChars ||
+        Encoding.UTF8.GetByteCount(content) > _currentThresholds.MaxInlineBytes ||
+        CountLines(content) > _currentThresholds.MaxInlineLines;
 
     public static bool ShouldOffload(string content) =>
         content.Length > MaxInlineChars ||

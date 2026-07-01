@@ -20,11 +20,13 @@ public sealed class PipelineRunner
         ["LoraAdapter"] = 0,
         ["MemoryCaching(Restore)"] = 1,
         ["RagContext"] = 2,
-        ["ProgressGuard"] = 3,
-        ["ProactiveSuggest"] = 4,
-        ["SafetyCheck"] = 5,
-        ["Router"] = 6,
-        ["ToolExecution"] = 7,
+        ["ReflectionAugmented"] = 3,
+        ["ProgressGuard"] = 4,
+        ["GenerationOrder"] = 5,
+        ["ProactiveSuggest"] = 6,
+        ["SafetyCheck"] = 7,
+        ["Router"] = 8,
+        ["ToolExecution"] = 9,
     };
 
     /// <summary>
@@ -39,9 +41,11 @@ public sealed class PipelineRunner
         (1,  false, false, ["MemoryCaching(Save)"]),
         (2,  false, false, ["Compaction"]),
         (3,  false, false, ["DiscoursePlanning"]),
-        (4,  true,  false, ["GrammarCheck", "AntiPatternCheck", "QualityGate", "DoDCheck", "ThinkingTag"]),
-        (5,  false, true,  ["CriticRepair"]),
-        (6,  false, false, ["Retrospective"]),
+        (4, true,  false, ["GrammarCheck", "AntiPatternCheck", "QualityGate", "DoDCheck", "ThinkingTag", "AbstentionCheck", "ToolEval"]),
+        (5,  false, false, ["SelfRefine"]),
+        (6,  false, true,  ["CriticRepair"]),
+        (7,  false, false, ["SelfReflection"]),
+        (8,  false, false, ["Retrospective"]),
     ];
 
     private sealed record StepEntry(
@@ -226,6 +230,7 @@ public sealed class PipelineRunner
             || context.GrammarCheckBlocked
             || context.AntiPatternBlocked
             || context.QualityGateBlocked
-            || context.DoDBlocked;
+            || context.DoDBlocked
+            || context.AbstentionBlocked;
     }
 }

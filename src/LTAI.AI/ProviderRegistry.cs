@@ -97,6 +97,21 @@ public async Task RefreshAsync(CancellationToken ct)
             var models = ParseModels(modelsObj);
             if (models.Count == 0) continue;
 
+            // Parse optional kv_cache config (edge providers only)
+            KvCacheConfig? kvCache = null;
+            if (entry.TryGetProperty("kv_cache", out var kv) && kv.ValueKind == JsonValueKind.Object)
+            {
+                kvCache = new KvCacheConfig(
+                    Engine: GetString(kv, "engine"),
+                    Description: GetString(kv, "description"),
+                    ServerArgs: GetString(kv, "server_args"),
+                    EnvVar: GetString(kv, "env_var"),
+                    Recommended: GetString(kv, "recommended"),
+                    Params: ParseKvCacheParams(kv, "params"),
+                    PerRequestSupported: GetBool(kv, "per_request_supported"),
+                    PerRequestParams: ParseKvCacheParams(kv, "per_request_params"));
+            }
+
             providers.Add(new ProviderInfo(
                 Id: id,
                 Name: name,
@@ -106,7 +121,8 @@ public async Task RefreshAsync(CancellationToken ct)
                 DocUrl: docUrl,
                 KeyUrl: null,
                 Models: models.ToArray(),
-                FetchedAt: now));
+                FetchedAt: now,
+                KvCache: kvCache));
         }
         return providers.ToArray();
     }
@@ -193,6 +209,26 @@ public async Task RefreshAsync(CancellationToken ct)
                 OpenWeights: GetBool(m, "open_weights")));
         }
         return models;
+    }
+
+    private static Dictionary<string, object>? ParseKvCacheParams(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var obj) || obj.ValueKind != JsonValueKind.Object)
+            return null;
+        var dict = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        foreach (var prop in obj.EnumerateObject())
+        {
+            dict[prop.Name] = prop.Value.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.Number when prop.Value.TryGetInt32(out var i) => i,
+                JsonValueKind.Number when prop.Value.TryGetDouble(out var d) => d,
+                JsonValueKind.String => prop.Value.GetString() ?? "",
+                _ => prop.Value.GetRawText(),
+            };
+        }
+        return dict.Count > 0 ? dict : null;
     }
 
     private static ModelBenchmark[]? ParseBenchmarks(JsonElement m)

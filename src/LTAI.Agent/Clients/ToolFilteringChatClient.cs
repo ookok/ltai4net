@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using LTAI.AI;
 using LTAI.Agent.Experts;
+using LTAI.Agent.Vector;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Caching.Memory;
 
@@ -42,6 +43,10 @@ public sealed class ToolFilteringChatClient : IChatClient
     public IReadOnlyList<(string Query, int Rounds, int ToolsFound)> ProactiveRetrievalHistory =>
         _proactiveHistory.AsReadOnly();
     private readonly List<(string, int, int)> _proactiveHistory = [];
+
+    /// <summary>Last Verbal-R3 tool annotations for observability.</summary>
+    public IReadOnlyList<VerbalAnnotation>? LastToolAnnotations => _lastToolAnnotations;
+    private List<VerbalAnnotation>? _lastToolAnnotations;
 
     public ToolFilteringChatClient(IChatClient inner, EmbeddingClient embedder,
         IToolRegistry toolRegistry,
@@ -341,8 +346,9 @@ public sealed class ToolFilteringChatClient : IChatClient
 
     /// <summary>
     /// L3 LLM cross-encoder re-rank: sends top-N candidates to the cheapest
-    /// available LLM and asks it to pick the most relevant tools. Used only
-    /// as fallback when ONNX embedding is unavailable.
+    /// available LLM and asks it to select the most relevant tools with
+    /// Verbal-R3 verbal annotations explaining each selection.
+    /// Used as fallback when ONNX embedding is unavailable.
     /// </summary>
     private async Task<List<ToolRegistry.ToolDef>> L3RerankAsync(
         string query, List<ToolRegistry.ToolDef> candidates, CancellationToken ct)
@@ -359,30 +365,108 @@ public sealed class ToolFilteringChatClient : IChatClient
             
             {{query}}
             
-            Select the {{DefaultTopK}} most relevant tools from this list. Return ONLY the tool names, one per line.
+            Select the {{DefaultTopK}} most relevant tools from this list. For each selected tool, explain WHY it is relevant.
             
             {{string.Join('\n', lines)}}
+            
+            Return a JSON array of {"name": "ToolName", "rationale": "why this tool is relevant", "confidence": "high|medium|low"}.
             """;
 
         var messages = new List<ChatMessage> { new(ChatRole.User, prompt) };
         var response = await _l3Client!.GetResponseAsync(
             messages,
-            new ChatOptions { Temperature = 0f, MaxOutputTokens = 200 },
+            new ChatOptions { Temperature = 0f, MaxOutputTokens = 500 },
             ct).ConfigureAwait(false);
 
         var text = response.Text ?? "";
-        var selectedNames = ParseToolNames(text);
 
-        if (selectedNames.Count == 0) return candidates;
+        // Try to parse JSON annotations
+        var annotations = ParseToolAnnotations(text);
+        if (annotations.Count > 0)
+        {
+            _lastToolAnnotations = annotations;
+            var selectedNames = new HashSet<string>(
+                annotations.Select(a => a.SourceId).Where(n => n != null)!,
+                StringComparer.OrdinalIgnoreCase);
 
-        var nameSet = new HashSet<string>(selectedNames, StringComparer.OrdinalIgnoreCase);
-        var reranked = candidates
+            if (selectedNames.Count > 0)
+            {
+                // Inject annotation rationale into tool descriptions for the Generator
+                var annotatedCandidates = candidates
+                    .Select(t =>
+                    {
+                        var ann = annotations.FirstOrDefault(a =>
+                            string.Equals(a.SourceId, t.Name, StringComparison.OrdinalIgnoreCase));
+                        if (ann != null && !string.IsNullOrWhiteSpace(ann.Rationale))
+                        {
+                            var desc = t.Description;
+                            if (!desc.Contains("分析:"))
+                                desc = $"{desc} (分析:{ann.Rationale})";
+                            return new ToolRegistry.ToolDef(t.Name, desc, t.Embedding, t.Domain);
+                        }
+                        return t;
+                    })
+                    .ToList();
+
+                return annotatedCandidates
+                    .Where(t => selectedNames.Contains(t.Name))
+                    .Concat(annotatedCandidates.Where(t => !selectedNames.Contains(t.Name)))
+                    .ToList();
+            }
+        }
+
+        // Fallback: parse plain tool names
+        var selectedNamesFallback = ParseToolNames(text);
+        if (selectedNamesFallback.Count == 0) return candidates;
+
+        var nameSet = new HashSet<string>(selectedNamesFallback, StringComparer.OrdinalIgnoreCase);
+        return candidates
             .Where(t => nameSet.Contains(t.Name))
             .Concat(candidates.Where(t => !nameSet.Contains(t.Name)))
             .ToList();
-
-        return reranked.Count > 0 ? reranked : candidates;
     }
+
+    /// <summary>
+    /// Parse Verbal-R3 tool annotations from JSON array response.
+    /// </summary>
+    private static List<VerbalAnnotation> ParseToolAnnotations(string text)
+    {
+        try
+        {
+            var startIdx = text.IndexOf('[');
+            var endIdx = text.LastIndexOf(']');
+            if (startIdx < 0 || endIdx <= startIdx) return [];
+
+            text = text[startIdx..(endIdx + 1)];
+            var items = System.Text.Json.JsonSerializer.Deserialize<List<ToolAnnotationItem>>(text,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (items == null || items.Count == 0) return [];
+
+            return items.Select(i => new VerbalAnnotation
+            {
+                Score = i.Confidence?.ToLowerInvariant() switch
+                {
+                    "high" => 0.9f,
+                    "medium" => 0.5f,
+                    _ => 0.2f
+                },
+                Rationale = i.Rationale ?? "",
+                Confidence = i.Confidence?.ToLowerInvariant() switch
+                {
+                    "high" => AnnotationConfidence.High,
+                    "medium" => AnnotationConfidence.Medium,
+                    _ => AnnotationConfidence.Low
+                },
+                SourceId = i.Name
+            }).ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private sealed record ToolAnnotationItem(string Name, string? Rationale, string? Confidence);
 
     private static List<string> ParseToolNames(string l3Response)
     {

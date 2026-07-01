@@ -27,6 +27,7 @@ public sealed class MultiProviderChatClient : IChatClient
     private readonly int _perProviderTimeoutSec;
     private volatile string? _lastError;
     private readonly ConcurrentDictionary<string, bool> _thinkingProviders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, object>> _kvCacheProviders = new(StringComparer.OrdinalIgnoreCase);
 
     // LLM call counter
     private static long _callCounter;
@@ -84,6 +85,13 @@ public sealed class MultiProviderChatClient : IChatClient
     public void RegisterEdge(string name, IChatClient client)
     {
         _providers.RegisterEdge(name, client);
+    }
+
+    /// <summary>Register KV cache configuration for a provider (for per-request param injection).</summary>
+    public void RegisterKvCacheConfig(string providerName, IReadOnlyDictionary<string, object>? perRequestParams)
+    {
+        if (perRequestParams != null && perRequestParams.Count > 0)
+            _kvCacheProviders[providerName] = perRequestParams;
     }
 
     public string ResolveProvider(ChatOptions? options) => _providers.ResolveProvider(options);
@@ -152,10 +160,11 @@ public sealed class MultiProviderChatClient : IChatClient
             var success = false;
 
             // Dedup tools
-            options = DedupTools(options);
-            options = ApplyThinkingOptions(options, p);
+                    options = DedupTools(options);
+                    options = ApplyThinkingOptions(options, p);
+                    options = ApplyKvCacheOptions(options, p);
 
-            // Notify of fallback
+                    // Notify of fallback
             if (lastFailedProvider != null)
             {
                 yield return new ChatResponseUpdate(ChatRole.Assistant,
@@ -276,6 +285,7 @@ public sealed class MultiProviderChatClient : IChatClient
             {
                 options = DedupTools(options);
                 options = ApplyThinkingOptions(options, p);
+                options = ApplyKvCacheOptions(options, p);
 
                 var callNum = Interlocked.Increment(ref _callCounter);
                 var toolCount = options?.Tools?.Count ?? 0;
@@ -373,6 +383,18 @@ public sealed class MultiProviderChatClient : IChatClient
         options.AdditionalProperties ??= [];
         options.AdditionalProperties["enable_thinking"] = true;
         options.AdditionalProperties["thought_in_content"] = true;
+        return options;
+    }
+
+    private ChatOptions? ApplyKvCacheOptions(ChatOptions? options, string provider)
+    {
+        if (!_kvCacheProviders.TryGetValue(provider, out var kvParams) || kvParams.Count == 0)
+            return options;
+        if (options == null)
+            options = new ChatOptions();
+        options.AdditionalProperties ??= [];
+        foreach (var (key, value) in kvParams)
+            options.AdditionalProperties[key] = value;
         return options;
     }
 

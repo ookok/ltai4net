@@ -11,8 +11,10 @@
 // ═══════════════════════════════════════════════════════════════
 
 using System.Text;
+using LTAI.Agent.Vector;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Agent.Pipeline.Steps;
 
@@ -24,19 +26,21 @@ namespace LTAI.Agent.Pipeline.Steps;
 public sealed class CriticRepairStep : IPipelineStep
 {
     private readonly ILogger<CriticRepairStep>? _logger;
+    private readonly IChatClient? _reviewer;
 
     public string Name => "CriticRepair";
 
-    public CriticRepairStep(ILogger<CriticRepairStep>? logger = null)
+    public CriticRepairStep(ILogger<CriticRepairStep>? logger = null, IChatClient? reviewer = null)
     {
         _logger = logger;
+        _reviewer = reviewer;
     }
 
-    public Task<MessageContext> ProcessAsync(MessageContext context)
+    public async Task<MessageContext> ProcessAsync(MessageContext context)
     {
         var failures = CollectFailures(context);
         if (failures.Count == 0)
-            return Task.FromResult(context);
+            return context;
 
         var repairState = GetOrCreateRepairState(context);
         repairState.AttemptCount++;
@@ -47,6 +51,22 @@ public sealed class CriticRepairStep : IPipelineStep
 
         var hints = SynthesizeRepairHints(failures, repairState, difficulty);
         repairState.LastHintsHash = ComputeSimpleHash(hints);
+
+        // LLM reviewer: when deterministic hints are insufficient after repeated attempts
+        if (_reviewer != null && difficulty >= 0.7 && repairState.AttemptCount >= 2)
+        {
+            try
+            {
+                var llmAdvice = await GenerateReviewAsync(failures, context, repairState.AttemptCount)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(llmAdvice))
+                    hints += "\n" + llmAdvice;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "CriticRepair: LLM reviewer failed (non-fatal)");
+            }
+        }
 
         lock (context.MessagesLock)
         {
@@ -59,7 +79,41 @@ public sealed class CriticRepairStep : IPipelineStep
             "CriticRepair: synthesized {Count} failure(s) into repair hints (difficulty={Difficulty:F2}, attempt={Attempt})",
             failures.Count, difficulty, repairState.AttemptCount);
 
-        return Task.FromResult(context);
+        return context;
+    }
+
+    private async Task<string?> GenerateReviewAsync(
+        List<CriticFailure> failures, MessageContext context, int attemptCount)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("You are a senior code reviewer. A template-based critic identified these issues, but the agent failed to fix them after multiple attempts.");
+        sb.AppendLine();
+        sb.AppendLine("## Query");
+        sb.AppendLine(context.Request.Length > 500 ? context.Request[..500] + "..." : context.Request);
+        sb.AppendLine();
+        sb.AppendLine("## Failures");
+        foreach (var f in failures)
+        {
+            sb.AppendLine($"- [{f.Severity}] {f.Dimension}: {f.Description}");
+            sb.AppendLine($"  Hint: {f.FixHint}");
+        }
+        sb.AppendLine();
+        sb.AppendLine("## Previous Tool Calls");
+        foreach (var (name, args, result) in context.ToolCalls.TakeLast(5))
+        {
+            var r = result.Length > 200 ? result[..200] + "..." : result;
+            sb.AppendLine($"- {name}({args}) → {r}");
+        }
+        sb.AppendLine();
+        sb.AppendLine("Diagnose the root cause and suggest a concrete fix the agent can apply. Be specific. Max 3 sentences.");
+
+        var response = await _reviewer!
+            .GetResponseAsync([new ChatMessage(ChatRole.User, sb.ToString())], null, context.CancellationToken)
+            .ConfigureAwait(false);
+        var text = response.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(text)) return null;
+
+        return "\n## LLM Reviewer Analysis\n" + text;
     }
 
     // ── Failure Collection ──
@@ -168,6 +222,51 @@ public sealed class CriticRepairStep : IPipelineStep
             }
         }
 
+        if (context.AbstentionBlocked)
+        {
+            var rules = new List<string>();
+            if (context.TryGet<List<string>>("AbstentionRules", out var abstentionRules) && abstentionRules?.Count > 0)
+                rules = abstentionRules;
+            else
+                rules = ["Agentic Abstention triggered"];
+
+            failures.Add(new CriticFailure(
+                Dimension: "Abstention",
+                Severity: FailureSeverity.Warning,
+                Description: "Agent detected a stopping condition",
+                Details: rules,
+                FixHint: "Review the stopping rules: if the task is genuinely impossible, provide a clear explanation of why; if the task is still viable, adjust the approach to avoid the detected pattern (repeated calls, empty results, etc.)."));
+        }
+
+        // Verbal-R3 Retrieval Quality check
+        if (context.TryGet<VerbalAnnotationSet>("VerbalAnnotations", out var annSet) && annSet != null)
+        {
+            if (annSet.Annotations.Count > 0 && annSet.AverageConfidence < 0.4)
+            {
+                failures.Add(new CriticFailure(
+                    Dimension: "RetrievalQuality",
+                    Severity: FailureSeverity.Warning,
+                    Description: $"Verbal-R3 检索置信度偏低 (avg={annSet.AverageConfidence:P1}, high={annSet.HighConfidenceRatio:P1})",
+                    Details: annSet.Annotations
+                        .Where(a => a.Confidence == AnnotationConfidence.Low)
+                        .Select(a => $"  - [{a.SourceId}] {a.Rationale}")
+                        .Take(5)
+                        .ToList(),
+                    FixHint: "降低 minSimilarity 阈值扩大搜索范围, 或使用更精确的查询词重新检索。Multiple low-confidence results suggest the retrieval scope is too narrow."));
+            }
+
+            // Persistently low confidence across multiple attempts
+            if (context.TryGet<int>("RetrievalScalingRounds", out var scalingRounds) && scalingRounds >= 2)
+            {
+                failures.Add(new CriticFailure(
+                    Dimension: "RetrievalQuality",
+                    Severity: FailureSeverity.Warning,
+                    Description: $"经过 {scalingRounds} 轮扩展检索后结果置信度仍不足",
+                    Details: [$"  扩展轮次: {scalingRounds}"],
+                    FixHint: "尝试更换检索策略: 使用不同的查询词、增加候选集大小、或改用语义搜索替代关键词搜索。"));
+            }
+        }
+
         return failures;
     }
 
@@ -268,6 +367,10 @@ public sealed class CriticRepairStep : IPipelineStep
             "DoD" => difficulty >= 0.5
                 ? "**Action**: Review completeness — add missing tests, remove TODOs/FIXMEs, replace {{ }} placeholders, verify documentation."
                 : "**Action**: Fill in the missing DoD criteria listed above. Quick completion check.",
+
+            "RetrievalQuality" => difficulty >= 0.5
+                ? "**Action**: Re-run retrieval with expanded scope. Use broader query keywords, reduce minSimilarity, invoke clustering for better coverage. Low Verbal-R3 confidence indicates the current search space is insufficient."
+                : "**Action**: Adjust retrieval parameters — the verbal annotations show weak signal. Try alternative query formulations or fall back to BM25 FTS.",
 
             _ => "**Action**: Address the specific issues listed above. Verify fix with appropriate validation tool."
         };

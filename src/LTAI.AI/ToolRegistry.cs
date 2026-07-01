@@ -132,6 +132,7 @@ public sealed class ToolRegistry : IToolRegistry
     // ═══════════════════════════════════════════
 
     private readonly List<ToolDef> _tools = new();
+    private readonly ConcurrentDictionary<string, AITool> _functionMap = new(StringComparer.OrdinalIgnoreCase);
     private volatile bool _initialized;
     private readonly object _lock = new();
     private volatile IReadOnlyList<ToolDef> _snapshot = Array.Empty<ToolDef>();
@@ -220,6 +221,21 @@ public sealed class ToolRegistry : IToolRegistry
     IReadOnlyList<ToolDef> IToolRegistry.GetToolsByDomain(string domain)
     {
         return _snapshot.Where(t => string.Equals(t.Domain, domain, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    AIFunction? IToolRegistry.GetToolByName(string name)
+        => _functionMap.TryGetValue(name, out var tool) && tool is AIFunction func ? func : null;
+
+    async Task<string?> IToolRegistry.InvokeToolAsync(string name, Dictionary<string, object?> args, CancellationToken ct)
+    {
+        if (_functionMap.TryGetValue(name, out var tool) && tool is AIFunction func)
+        {
+            var afArgs = new AIFunctionArguments();
+            foreach (var kv in args) afArgs[kv.Key] = kv.Value;
+            var result = await func.InvokeAsync(afArgs, ct).ConfigureAwait(false);
+            return result?.ToString();
+        }
+        return null;
     }
 
     void IToolRegistry.Clear() => ClearInternal();
@@ -346,6 +362,10 @@ public sealed class ToolRegistry : IToolRegistry
             var domain = GetToolDomain(list[i]);
             defs.Add(new ToolDef(list[i].Name ?? "unknown", list[i].Description ?? "", emb, domain));
         }
+
+        // ── 保存函数引用 ──
+        foreach (var tool in list)
+            if (tool.Name != null) _functionMap[tool.Name] = tool;
 
         // ── BM25 倒排索引 ──
         lock (_lock)
@@ -602,6 +622,7 @@ public sealed class ToolRegistry : IToolRegistry
             _initialized = false;
             _snapshot = [];
             _stats.Clear();
+            _functionMap.Clear();
             _bm25Version = 0;
         }
     }

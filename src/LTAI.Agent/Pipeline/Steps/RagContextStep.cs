@@ -11,6 +11,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 using LTAI.Agent.Memory;
+using LTAI.Agent.Vector;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -152,6 +153,25 @@ public sealed class RagContextStep : IPipelineStep
                 {
                     context.Messages.Add(new ChatMessage(ChatRole.System, $"[话语上下文]\n{organized}"));
                 }
+
+                // Step 4: Verbal-R3 annotations — generate analytic narratives for discourse segments
+                if (_discourseClassifier != null)
+                {
+                    var annotations = await GenerateVerbalAnnotationsAsync(
+                        organized, context.Request, context.CancellationToken)
+                        .ConfigureAwait(false);
+                    if (annotations.Annotations.Count > 0)
+                    {
+                        _logger.LogDebug("RagContextStep: added {Count} Verbal-R3 annotations (avg confidence={Conf:F2})",
+                            annotations.Annotations.Count, annotations.AverageConfidence);
+                        var annText = FormatVerbalAnnotationsAsContext(annotations);
+                        lock (context.MessagesLock)
+                        {
+                            context.Messages.Add(new ChatMessage(ChatRole.System, $"[Verbal Annotations (arXiv:2605.01399)]\n{annText}"));
+                        }
+                    }
+                }
+
                 _logger.LogDebug("RagContextStep: added discourse-organized context");
             }
         }
@@ -355,4 +375,110 @@ Return a JSON array of {{""index"": int, ""role"": ""...""}} only.";
         "conclusion" => "结论 (Conclusion)",
         _ => "其他 (Other)",
     };
+
+    // ── Verbal-R3 Integration ──
+
+    /// <summary>
+    /// Generate Verbal-R3 verbal annotations for discourse segments.
+    /// Each annotation articulates the logical connection between the query
+    /// and each discourse segment, with confidence and usage suggestions.
+    /// </summary>
+    private async Task<VerbalAnnotationSet> GenerateVerbalAnnotationsAsync(
+        string discourseContext, string query, CancellationToken ct)
+    {
+        var annotations = new List<VerbalAnnotation>();
+        var segments = SplitIntoDiscourseSegments(discourseContext);
+        if (segments.Count == 0 || _discourseClassifier == null)
+            return new VerbalAnnotationSet { Query = query };
+
+        var prompt = $@"You are a verbal relevance annotator (Verbal-R3). Analyze the logical connection between the user query and each discourse segment.
+
+User Query: {query}
+
+Discourse Segments:
+{string.Join("\n\n", segments.Select((s, i) => $"[Segment {i + 1}]\n{s}"))}
+
+For each segment, output a JSON array of objects:
+{{""score"": <0-10>, ""rationale"": ""why this segment is relevant to the query"", ""confidence"": ""low|medium|high"", ""suggestion"": ""how to use this in the final response""}}";
+
+        try
+        {
+            var response = await _discourseClassifier
+                .GetResponseAsync([new ChatMessage(ChatRole.User, prompt)], cancellationToken: ct)
+                .ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(response?.Text))
+                return new VerbalAnnotationSet { Query = query };
+
+            var text = response.Text.Trim();
+            // Try to locate JSON array in the response
+            var startIdx = text.IndexOf('[');
+            var endIdx = text.LastIndexOf(']');
+            if (startIdx >= 0 && endIdx > startIdx)
+            {
+                text = text[startIdx..(endIdx + 1)];
+                var items = System.Text.Json.JsonSerializer.Deserialize<List<AnnotationResponseItem>>(text,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (items != null)
+                {
+                    for (int i = 0; i < items.Count && i < segments.Count; i++)
+                    {
+                        annotations.Add(new VerbalAnnotation
+                        {
+                            Score = (float)Math.Clamp(items[i].Score / 10.0, 0, 1),
+                            Rationale = items[i].Rationale ?? "",
+                            Confidence = ParseConfidence(items[i].Confidence),
+                            Suggestion = items[i].Suggestion,
+                            SourceId = $"Segment {i + 1}"
+                        });
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "RagContextStep: Verbal-R3 annotation generation failed (non-fatal)");
+        }
+
+        return new VerbalAnnotationSet { Query = query, Annotations = annotations };
+    }
+
+    /// <summary>
+    /// Format verbal annotations as compact context for the Generator.
+    /// This follows the Verbal-R3 paradigm: annotations guide the LLM on
+    /// how to use each retrieved segment, rather than dumping raw text.
+    /// </summary>
+    private static string FormatVerbalAnnotationsAsContext(VerbalAnnotationSet set)
+    {
+        if (set.Annotations.Count == 0) return "";
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("检索结果逐段分析：");
+        for (int i = 0; i < set.Annotations.Count; i++)
+        {
+            var a = set.Annotations[i];
+            var confLabel = a.Confidence switch
+            {
+                AnnotationConfidence.High => "高置信",
+                AnnotationConfidence.Medium => "中置信",
+                _ => "低置信"
+            };
+            sb.AppendLine($"  [{i + 1}] 相关度={a.Score * 10:F0}/10 ({confLabel})");
+            sb.AppendLine($"      分析: {a.Rationale}");
+            if (!string.IsNullOrEmpty(a.Suggestion))
+                sb.AppendLine($"      建议: {a.Suggestion}");
+        }
+        return sb.ToString();
+    }
+
+    private static AnnotationConfidence ParseConfidence(string? confidence)
+        => confidence?.ToLowerInvariant() switch
+        {
+            "high" => AnnotationConfidence.High,
+            "medium" => AnnotationConfidence.Medium,
+            "low" => AnnotationConfidence.Low,
+            _ => AnnotationConfidence.Medium
+        };
+
+    /// <summary>Internal DTO for JSON deserialization of annotation items.</summary>
+    private sealed record AnnotationResponseItem(double Score, string? Rationale, string? Confidence, string? Suggestion);
 }

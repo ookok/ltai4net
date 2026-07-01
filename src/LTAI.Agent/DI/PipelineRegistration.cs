@@ -56,6 +56,16 @@ public static partial class ServiceCollectionExtensions
         services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<DiscoursePlanningStep>());
         services.AddSingleton<RetrospectiveStep>();
         services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<RetrospectiveStep>());
+        services.AddSingleton<AbstentionCheckStep>();
+        services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<AbstentionCheckStep>());
+        services.AddSingleton<ToolEvalStep>();
+        services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<ToolEvalStep>());
+        services.AddSingleton<SelfRefineStep>();
+        services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<SelfRefineStep>());
+        services.AddSingleton<GenerationOrderStep>();
+        services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<GenerationOrderStep>());
+        services.AddSingleton<SelfReflectionStep>();
+        services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<SelfReflectionStep>());
         services.AddSingleton<CriticRepairStep>();
         services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<CriticRepairStep>());
 

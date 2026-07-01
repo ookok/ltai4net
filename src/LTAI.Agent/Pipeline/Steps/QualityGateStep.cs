@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using LTAI.Agent.Tools.Review;
+using LTAI.Agent.Vector;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -34,7 +35,7 @@ public sealed class QualityGateStep : IPipelineStep
     private readonly double _passThreshold;
 
     /// <summary>Dimension weights (normalized to 1.0 sum after application).</summary>
-    private static readonly double[] DimWeights = [1.2, 1.0, 0.8, 1.1, 0.9, 1.0];
+    private static readonly double[] DimWeights = [1.2, 1.0, 0.8, 1.1, 0.9, 1.0, 1.0];
 
     public string Name => "QualityGate";
 
@@ -82,13 +83,14 @@ public sealed class QualityGateStep : IPipelineStep
     }
 
     /// <summary>
-    /// 6-dimension critique scoring (garden-skills inspired + Disco-RAG):
+    /// 7-dimension critique scoring (garden-skills + Disco-RAG + Verbal-R3):
     ///   Philosophy — alignment with agent purpose & user intent
     ///   Completeness — covers all requested aspects
     ///   Clarity — well-structured, good readability
     ///   Craft — no clichés, no placeholders, polished
     ///   Functionality — proper tool usage, no errors
     ///   DiscourseCoherence — rhetorical flow (background→evidence→conclusion)
+    ///   RetrievalGroundedness — verbal annotation quality & retrieval confidence
     /// </summary>
     private QualityGateResult EvaluateQuality(string text, MessageContext context)
     {
@@ -100,6 +102,7 @@ public sealed class QualityGateStep : IPipelineStep
             EvaluateCraft(text),
             EvaluateFunctionality(text, context),
             EvaluateDiscourseCoherence(text),
+            EvaluateRetrievalGroundedness(context),
         };
 
         var issues = new List<string>();
@@ -428,6 +431,85 @@ public sealed class QualityGateStep : IPipelineStep
         return new DimensionScore
         {
             Name = "话语连贯",
+            Score = Math.Clamp(score, 0, 10),
+            Note = issues.Count > 0 ? string.Join("; ", issues) : null,
+        };
+    }
+
+    // ── Dimension 7: RetrievalGroundedness — Verbal-R3 annotation quality ──
+
+    /// <summary>
+    /// Evaluates whether the response is grounded in retrieved evidence
+    /// by checking Verbal-R3 annotations in the pipeline context.
+    /// High-quality annotations → well-grounded response.
+    /// Reference: arXiv:2605.01399 (ACL 2026)
+    /// </summary>
+    private static DimensionScore EvaluateRetrievalGroundedness(MessageContext context)
+    {
+        var score = 8.0;
+        var issues = new List<string>();
+
+        // Check for Verbal-R3 annotations in context
+        if (context.TryGet<VerbalAnnotationSet>("VerbalAnnotations", out var annSet) && annSet != null)
+        {
+            if (annSet.Annotations.Count > 0)
+            {
+                var avgConf = annSet.AverageConfidence;
+                var highRatio = annSet.HighConfidenceRatio;
+
+                if (avgConf >= 0.75)
+                    score += 1.5;
+                else if (avgConf >= 0.5)
+                    score += 0.5;
+                else
+                {
+                    score -= 1.5;
+                    issues.Add($"检索结果置信度偏低 (avg={avgConf:P1}), 建议补充验证");
+                }
+
+                if (highRatio >= 0.5)
+                    score += 1.0;
+                else if (highRatio < 0.2 && annSet.Annotations.Count > 1)
+                {
+                    score -= 1.0;
+                    issues.Add("高置信检索结果比例偏低, 可能引用不可靠信息");
+                }
+            }
+            else
+            {
+                score -= 1.0;
+                issues.Add("检索阶段未产生 Verbal Annotation");
+            }
+        }
+        else
+        {
+            // No verbal annotations — check if there are any system context messages
+            // from RagContextStep indicating retrieval happened
+            var hasRetrieval = false;
+            lock (context.MessagesLock)
+            {
+                hasRetrieval = context.Messages.Any(m =>
+                    m.Role == ChatRole.System &&
+                    (m.Text?.Contains("[话语上下文]") == true ||
+                     m.Text?.Contains("L4 — Deep Search") == true));
+            }
+
+            if (!hasRetrieval)
+            {
+                score -= 2.0;
+                issues.Add("未进行检索即直接生成回复, 可能缺乏事实依据");
+            }
+            else
+            {
+                // Retrieval happened but without verbal annotations (legacy mode)
+                score -= 0.5;
+                issues.Add("检索未附带 Verbal Annotation, 建议启用 Verbal-R3 以提升可追溯性");
+            }
+        }
+
+        return new DimensionScore
+        {
+            Name = "检索归因",
             Score = Math.Clamp(score, 0, 10),
             Note = issues.Count > 0 ? string.Join("; ", issues) : null,
         };

@@ -32,7 +32,7 @@ partial class ContextOffloader
             var tc = toolCalls[i];
 
             bool predictiveOffload = _predictiveTracker?.ShouldPreOffload(tc.Name, tc.Result.Length) == true;
-            if (!predictiveOffload && !ShouldOffload(tc.Result))
+            if (!predictiveOffload && !ShouldOffloadAdaptive(tc.Result))
             {
                 entries.Add(new OffloadEntry(tc.Name, tc.Arguments, tc.Result, null));
                 continue;
@@ -118,7 +118,7 @@ partial class ContextOffloader
     public async Task<string> OffloadMessageTextAsync(
         string text, string traceId, string label, int seq)
     {
-        if (!ShouldOffload(text)) return text;
+        if (!ShouldOffloadAdaptive(text)) return text;
 
         var filename = $"{traceId}-msg-{seq:D3}-{SanitizeLabel(label)}.md";
         var refPath = Path.Combine(_refsDir, filename);

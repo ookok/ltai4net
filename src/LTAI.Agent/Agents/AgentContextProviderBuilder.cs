@@ -90,7 +90,7 @@ internal sealed class AgentContextProviderBuilder
             kbGraph, codeGraph, codeChunkIndex, wasmtimeSandbox,
             new L3OnDemandProvider(palaceStore, _entropy,
                 _loggerFactory.CreateLogger<L3OnDemandProvider>()),
-            new L4DeepSearchProvider(palaceStore, embedder, _entropy,
+            new L4DeepSearchProvider(palaceStore, embedder, _entropy, null,
                 _loggerFactory.CreateLogger<L4DeepSearchProvider>()),
             new L6AgentDiaryProvider(palaceStore, name,
                 _loggerFactory.CreateLogger<L6AgentDiaryProvider>()),

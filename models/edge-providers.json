@@ -6,6 +6,17 @@
     "api": "http://localhost:11434/v1",
     "name": "Ollama",
     "doc": "https://ollama.ai/library",
+    "kv_cache": {
+      "engine": "ollama",
+      "env_var": "OLLAMA_KV_CACHE_TYPE",
+      "recommended": "q8_0",
+      "description": "Set OLLAMA_KV_CACHE_TYPE=q8_0 for 2x memory reduction vs fp16 default",
+      "params": {
+        "cache_type_k": "q8_0",
+        "cache_type_v": "q8_0"
+      },
+      "per_request_supported": false
+    },
     "models": {
       "qwen3-8b": {
         "id": "ollama/qwen3-8b",
@@ -191,6 +202,16 @@
     "api": "http://localhost:8080/v1",
     "name": "llama.cpp",
     "doc": "https://github.com/ggml-org/llama.cpp",
+    "kv_cache": {
+      "engine": "llamacpp",
+      "server_args": "--cache-type-k q8_0 --cache-type-v q8_0",
+      "description": "Use Q8_0 KV cache quantization for ~50% memory reduction",
+      "params": {
+        "cache_type_k": "q8_0",
+        "cache_type_v": "q8_0"
+      },
+      "per_request_supported": false
+    },
     "models": {
       "qwen3-8b": {
         "id": "llamacpp/qwen3-8b",
@@ -276,6 +297,19 @@
     "api": "http://localhost:8000/v1",
     "name": "vLLM",
     "doc": "https://docs.vllm.ai",
+    "kv_cache": {
+      "engine": "vllm",
+      "server_args": "--kv-cache-dtype auto --enable-prefix-caching",
+      "description": "Auto KV cache dtype + prefix caching for adaptive memory usage",
+      "params": {
+        "kv_cache_dtype": "auto",
+        "enable_prefix_caching": true
+      },
+      "per_request_supported": true,
+      "per_request_params": {
+        "enable_prefix_caching": true
+      }
+    },
     "models": {
       "qwen3-8b": {
         "id": "vllm/qwen3-8b",
@@ -386,6 +420,15 @@
     "api": "http://localhost:1234/v1",
     "name": "LM Studio",
     "doc": "https://lmstudio.ai/docs",
+    "kv_cache": {
+      "engine": "lmstudio",
+      "description": "Configure KV cache quantization in LM Studio UI: Hardware → KV Cache Quantization",
+      "params": {
+        "cache_type_k": "q8_0",
+        "cache_type_v": "q8_0"
+      },
+      "per_request_supported": false
+    },
     "models": {
       "qwen3-8b": {
         "id": "lmstudio/qwen3-8b",
@@ -471,6 +514,15 @@
     "api": "http://localhost:5001/v1",
     "name": "KoboldCPP",
     "doc": "https://github.com/LostRuins/koboldcpp",
+    "kv_cache": {
+      "engine": "koboldcpp",
+      "server_args": "--cache-mode q4 --contextsize 8192",
+      "description": "Use Q4 cache mode for memory-efficient KV cache",
+      "params": {
+        "cache_mode": "q4"
+      },
+      "per_request_supported": false
+    },
     "models": {
       "qwen3-8b": {
         "id": "koboldcpp/qwen3-8b",

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using LTAI.AI;
 using LTAI.Agent.Context;
+using LTAI.Agent.Vector;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -12,9 +13,14 @@ public sealed class L4DeepSearchProvider : AIContextProvider
 {
     private const int MaxDrawers = 5;
     private const float MinSimilarity = 0.25f;
+    private const int MaxScalingRounds = 3;
+    private const double ScalingConfidenceThreshold = 0.5;
+    private const int ScaleFactorPerRound = 2;
+
     private readonly PalaceStore _store;
     private readonly EmbeddingClient _embedder;
     private readonly EntropyTracker? _entropy;
+    private readonly IChatClient? _verbalAnnotator;
     private readonly ILogger<L4DeepSearchProvider>? _logger;
     private readonly ConcurrentDictionary<int, (DateTime Expiry, AIContext Context)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
@@ -23,11 +29,13 @@ public sealed class L4DeepSearchProvider : AIContextProvider
         PalaceStore store,
         EmbeddingClient embedder,
         EntropyTracker? entropy = null,
+        IChatClient? verbalAnnotator = null,
         ILogger<L4DeepSearchProvider>? logger = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _embedder = embedder ?? throw new ArgumentNullException(nameof(embedder));
         _entropy = entropy;
+        _verbalAnnotator = verbalAnnotator;
         _logger = logger;
     }
 
@@ -69,44 +77,32 @@ public sealed class L4DeepSearchProvider : AIContextProvider
                 ?? MinSimilarity;
 
             // ── EvoEmbedding-inspired Single-Round Context-Aware Retrieval ──
-            // Replaces the previous 3-phase protocol (Grounding → Entity Identification → Synthesis)
-            // with a single hybrid search + temporal decay re-ranking.
-            // The key insight (arXiv:2606.21649): evolvable embeddings make simple
-            // retrieval competitive with complex multi-round protocols.
-            var rawResults = await _store.HybridSearchAsync(queryVec, query, MaxDrawers * 3, wing)
-                .ConfigureAwait(false);
-
-            // Context-aware re-ranking: apply temporal decay + relevance boost
-            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var ranked = rawResults
-                .Select(r =>
-                {
-                    // Temporal decay: recent memories weighted higher (half-life = 5 min)
-                    var age = Math.Max(0, now - r.Drawer.CreatedAt);
-                    var temporalWeight = Math.Exp(-age / 300_000.0);
-                    // Importance boost for high-importance entries
-                    var importanceBoost = 1.0 + r.Drawer.Importance * 0.5;
-                    // Entity surface boost: .entity rooms contain reverse-lookup QA
-                    var entityBoost = r.Drawer.Room?.EndsWith(".entity") == true ? 1.2 : 1.0;
-                    // Combined score
-                    var combined = r.Score * temporalWeight * importanceBoost * entityBoost;
-                    return (r.Drawer, CombinedScore: combined, r.Score, TemporalWeight: temporalWeight);
-                })
-                .Where(x => x.CombinedScore >= effectiveMinSimilarity * 0.02)
-                .OrderByDescending(x => x.CombinedScore)
-                .Take(MaxDrawers * 2)
-                .ToList();
+            // augmented with Verbal-R3 relevance-guided test-time scaling
+            var (ranked, annotations) = await RetrieveWithVerbalScalingAsync(
+                query, queryVec, wing, effectiveMinSimilarity, ct).ConfigureAwait(false);
 
             if (ranked.Count == 0) return new AIContext();
 
-            var lines = new List<string> { "## L4 — Deep Search (EvoEmbedding)\n<memory>" };
+            var lines = new List<string>
+            {
+                "## L4 — Deep Search (EvoEmbedding + Verbal-R3)\n<memory>"
+            };
             var totalLen = lines[0].Length;
 
-            foreach (var (drawer, combinedScore, rrfScore, temporalWeight) in ranked)
+            foreach (var (drawer, combinedScore, rrfScore, temporalWeight, ann) in ranked)
             {
                 var tierTag = temporalWeight >= 0.8 ? "🔥" : temporalWeight >= 0.5 ? "🕐" : "📜";
-                var snippet = MemoryCompressor.SmartTruncate(drawer.Content, 300);
-                var entry = $"  {tierTag} [{drawer.Wing}/{drawer.Room}] (rrf:{rrfScore:F3} t:{temporalWeight:F2}) {snippet}";
+                var confidenceTag = ann?.Confidence switch
+                {
+                    AnnotationConfidence.High => "✓",
+                    AnnotationConfidence.Medium => "~",
+                    _ => "?"
+                };
+                var snippet = MemoryCompressor.SmartTruncate(drawer.Content, 250);
+                var rationale = ann != null && !string.IsNullOrWhiteSpace(ann.Rationale)
+                    ? $" | 分析:{ann.Rationale}"
+                    : "";
+                var entry = $"  {tierTag} [{confidenceTag}] [{drawer.Wing}/{drawer.Room}] (rrf:{rrfScore:F3} t:{temporalWeight:F2}){rationale} {snippet}";
                 if (totalLen + entry.Length > MemoryBudget.L4MaxTokens * 4) break;
                 lines.Add(entry);
                 totalLen += entry.Length;
@@ -132,9 +128,23 @@ public sealed class L4DeepSearchProvider : AIContextProvider
 
             lines.Add("</memory>");
 
+            // Append Verbal-R3 annotation summary if available
+            if (annotations != null && annotations.Annotations.Count > 0)
+            {
+                lines.Add("\n<verbal-annotations>");
+                lines.Add($"  平均置信度: {annotations.AverageConfidence:P1}");
+                lines.Add($"  高置信比例: {annotations.HighConfidenceRatio:P1}");
+                if (annotations.AverageConfidence < ScalingConfidenceThreshold)
+                {
+                    lines.Add("  ⚠️ 整体置信偏低 — Generator 需额外验证或触发扩展搜索");
+                }
+                lines.Add("</verbal-annotations>");
+                totalLen += 100;
+            }
+
             if (lines.Count == 2) return new AIContext();
 
-            _logger?.LogDebug("L4DeepSearch: {Count} results (single-round, temporal-decay re-ranked), ~{Tokens}t",
+            _logger?.LogDebug("L4DeepSearch: {Count} results (Verbal-R3 scaled), ~{Tokens}t",
                 ranked.Count, totalLen / 4);
 
             var result = new AIContext
@@ -143,7 +153,6 @@ public sealed class L4DeepSearchProvider : AIContextProvider
             };
             _cache[cacheKey] = (DateTime.UtcNow + CacheTtl, result);
             return result;
-
         }
         catch (Exception ex)
         {
@@ -152,4 +161,191 @@ public sealed class L4DeepSearchProvider : AIContextProvider
         }
     }
 
+    /// <summary>
+    /// Verbal-R3 relevance-guided test-time scaling.
+    /// Iteratively expands search scope when top results have low annotation confidence.
+    /// Reference: arXiv:2605.01399 (ACL 2026)
+    /// </summary>
+    private async Task<(
+        List<(PalaceStore.Drawer Drawer, double CombinedScore, float RrfScore, double TemporalWeight, VerbalAnnotation? Annotation)>,
+        VerbalAnnotationSet?)> RetrieveWithVerbalScalingAsync(
+        string query, float[] queryVec, string? wing,
+        float minSimilarity, CancellationToken ct)
+    {
+        var allResults = new List<PalaceStore.Drawer>();
+        var seenIds = new HashSet<string>();
+        int currentTopK = MaxDrawers * 3;
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        for (int round = 0; round < MaxScalingRounds; round++)
+        {
+            // Round 0: hybrid search; subsequent rounds: expand candidate pool
+            var rawResults = await _store.HybridSearchAsync(queryVec, query, currentTopK, wing)
+                .ConfigureAwait(false);
+
+            foreach (var r in rawResults)
+            {
+                if (seenIds.Add(r.Drawer.DrawerId ?? r.Drawer.Content.GetHashCode().ToString()))
+                    allResults.Add(r.Drawer);
+            }
+
+            // Re-rank with temporal decay
+            now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var ranked = allResults
+                .Select(d =>
+                {
+                    var age = Math.Max(0, now - d.CreatedAt);
+                    var temporalWeight = Math.Exp(-age / 300_000.0);
+                    var importanceBoost = 1.0 + d.Importance * 0.5;
+                    return (Drawer: d, TemporalWeight: temporalWeight, CombinedScore: temporalWeight * importanceBoost);
+                })
+                .OrderByDescending(x => x.CombinedScore)
+                .Take(MaxDrawers * 2)
+                .ToList();
+
+            // Generate verbal annotations for top results
+            if (_verbalAnnotator != null && ranked.Count > 0)
+            {
+                var annotationSet = await GenerateVerbalAnnotationsAsync(query, ranked, ct)
+                    .ConfigureAwait(false);
+
+                if (annotationSet.AverageConfidence >= ScalingConfidenceThreshold ||
+                    annotationSet.HighConfidenceRatio >= 0.4)
+                {
+                    // Sufficient confidence — return results
+                    var final = ranked
+                        .Select(r => (
+                            r.Drawer,
+                            r.CombinedScore,
+                            RrfScore: 0f,
+                            r.TemporalWeight,
+                            Annotation: annotationSet.Annotations.FirstOrDefault(
+                                a =>                                 a.SourceId == r.Drawer.DrawerId)))
+                        .ToList();
+                    return (final, annotationSet);
+                }
+
+                // Low confidence — expand search scope
+                _logger?.LogDebug("L4DeepSearch: Verbal-R3 scaling round {Round}/3 (avg confidence={Conf:P2})",
+                    round + 1, annotationSet.AverageConfidence);
+                currentTopK *= ScaleFactorPerRound;
+            }
+            else
+            {
+                // No annotator available — return results immediately
+                var final = ranked
+                    .Select(r => (r.Drawer, r.CombinedScore, RrfScore: 0f, r.TemporalWeight, Annotation: (VerbalAnnotation?)null))
+                    .ToList();
+                return (final, null);
+            }
+        }
+
+        // Final round: return whatever we have with a warning
+        var fallback = allResults
+            .Select(d =>
+            {
+                var age = Math.Max(0, now - d.CreatedAt);
+                var temporalWeight = Math.Exp(-age / 300_000.0);
+                return (Drawer: d, CombinedScore: temporalWeight * (1.0 + d.Importance * 0.5),
+                    RrfScore: 0f, TemporalWeight: temporalWeight, Annotation: (VerbalAnnotation?)null);
+            })
+            .OrderByDescending(x => x.CombinedScore)
+            .Take(MaxDrawers)
+            .ToList();
+        return (fallback, null);
+    }
+
+    /// <summary>
+    /// Generate Verbal-R3 verbal annotations for top-ranked memory items.
+    /// Each annotation explains the logical connection between query and memory content.
+    /// </summary>
+    private async Task<VerbalAnnotationSet> GenerateVerbalAnnotationsAsync(
+        string query,
+        List<(PalaceStore.Drawer Drawer, double TemporalWeight, double CombinedScore)> items,
+        CancellationToken ct)
+    {
+        if (_verbalAnnotator == null || items.Count == 0)
+            return new VerbalAnnotationSet { Query = query };
+
+        var annotations = new List<VerbalAnnotation>();
+
+        if (items.Count == 1)
+        {
+            annotations.Add(new VerbalAnnotation
+            {
+                Score = 0.5f,
+                Rationale = "单一结果，无法对比分析",
+                Confidence = AnnotationConfidence.Medium,
+                SourceId = items[0].Drawer.DrawerId
+            });
+            return new VerbalAnnotationSet { Query = query, Annotations = annotations };
+        }
+
+                var itemLines = items.Select((item, i) =>
+                {
+                    var preview = MemoryCompressor.SmartTruncate(item.Drawer.Content, 150);
+                    return $"[{i + 1}] (score={item.CombinedScore:F3}) {preview}";
+                });
+
+        var prompt = $@"Analyze the relevance of each memory item to the user query.
+
+User Query: {query}
+
+Memory Items:
+{string.Join("\n", itemLines)}
+
+For each item, output a JSON array:
+[{{""score"": <0-10>, ""rationale"": ""why this memory is relevant to the query"", ""confidence"": ""low|medium|high"", ""suggestion"": ""how to use this item""}}]";
+
+        try
+        {
+            var response = await _verbalAnnotator
+                .GetResponseAsync([new ChatMessage(ChatRole.User, prompt)], cancellationToken: ct)
+                .ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(response?.Text))
+                return new VerbalAnnotationSet { Query = query };
+
+            var text = response.Text.Trim();
+            var startIdx = text.IndexOf('[');
+            var endIdx = text.LastIndexOf(']');
+            if (startIdx >= 0 && endIdx > startIdx)
+            {
+                text = text[startIdx..(endIdx + 1)];
+                var parsed = System.Text.Json.JsonSerializer.Deserialize<List<AnnotationResponseItem>>(text,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (parsed != null)
+                {
+                    for (int i = 0; i < parsed.Count && i < items.Count; i++)
+                    {
+                        annotations.Add(new VerbalAnnotation
+                        {
+                            Score = (float)Math.Clamp(parsed[i].Score / 10.0, 0, 1),
+                            Rationale = parsed[i].Rationale ?? "",
+                            Confidence = ParseConfidence(parsed[i].Confidence),
+                            Suggestion = parsed[i].Suggestion,
+                            SourceId = items[i].Drawer.DrawerId
+                        });
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "L4DeepSearch: Verbal-R3 annotation failed (non-fatal)");
+        }
+
+        return new VerbalAnnotationSet { Query = query, Annotations = annotations };
+    }
+
+    private static AnnotationConfidence ParseConfidence(string? confidence)
+        => confidence?.ToLowerInvariant() switch
+        {
+            "high" => AnnotationConfidence.High,
+            "medium" => AnnotationConfidence.Medium,
+            "low" => AnnotationConfidence.Low,
+            _ => AnnotationConfidence.Medium
+        };
+
+    private sealed record AnnotationResponseItem(double Score, string? Rationale, string? Confidence, string? Suggestion);
 }

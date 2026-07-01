@@ -88,7 +88,8 @@ public sealed class Reranker
     }
 
     /// <summary>
-    /// LLM-based reranking: send candidates + query to LLM for precision scoring.
+    /// LLM-based reranking: send candidates + query to LLM for precision scoring
+    /// with Verbal-R3 verbal annotations.
     /// </summary>
     public async Task<List<RankedResult>> RerankWithLLMAsync(
         string query,
@@ -96,13 +97,43 @@ public sealed class Reranker
         RerankerWeights? weights = null,
         CancellationToken ct = default)
     {
+        var (results, _) = await RerankWithVerbalAnnotationsAsync(query, candidates, weights, ct)
+            .ConfigureAwait(false);
+        return results;
+    }
+
+    /// <summary>
+    /// Verbal-R3 reranking: returns both ranked results and verbal annotations.
+    /// Reference: arXiv:2605.01399 (ACL 2026)
+    /// </summary>
+    public async Task<(List<RankedResult> Results, VerbalAnnotationSet Annotations)> RerankWithVerbalAnnotationsAsync(
+        string query,
+        List<(NodeRow node, float embeddingScore)> candidates,
+        RerankerWeights? weights = null,
+        CancellationToken ct = default)
+    {
         var effectiveWeights = weights ?? new RerankerWeights();
+        var annotationsList = new List<VerbalAnnotation>();
 
         if (candidates.Count <= 1)
-            return candidates.Select((c, i) => new RankedResult(c.node, c.embeddingScore, c.embeddingScore, i + 1, effectiveWeights)).ToList();
+        {
+            var single = candidates.Select((c, i) =>
+            {
+                var ann = new VerbalAnnotation
+                {
+                    Score = c.embeddingScore,
+                    Rationale = "单一候选，无法对比评分",
+                    Confidence = AnnotationConfidence.Medium,
+                    SourceId = $"{c.node.Kind}:{c.node.Name}"
+                };
+                annotationsList.Add(ann);
+                return new RankedResult(c.node, c.embeddingScore, c.embeddingScore, i + 1, effectiveWeights) { Annotation = ann };
+            }).ToList();
+            return (single, MakeSet(query, annotationsList));
+        }
 
         var sb = new StringBuilder();
-        sb.AppendLine("Score each passage 0-10 for relevance to the query. Be strict.");
+        sb.AppendLine("For each passage, provide a relevance score (0-10) and a verbal rationale explaining WHY it is (or isn't) relevant to the query. Be strict and analytic.");
         sb.AppendLine();
         sb.AppendLine($"Query: {query}");
         sb.AppendLine();
@@ -117,51 +148,99 @@ public sealed class Reranker
             sb.AppendLine();
         }
 
-        sb.AppendLine("Respond with a JSON array of scores, one per passage, in order.");
-        sb.AppendLine("Example: [8, 3, 6, 9, 2]");
+        sb.AppendLine("Respond with a JSON array of objects, one per passage, in order.");
+        sb.AppendLine(@"Example: [{\""score\"": 8, \""rationale\"": \""该段描述了 X 的实现方法，与查询 Y 直接相关\"", \""confidence\"": \""high\"", \""suggestion\"": \""引用为主要证据\""}]");
 
         try
         {
             var response = await _llm.GetResponseAsync([
-                new ChatMessage(ChatRole.System, "You are a strict relevance ranker. Output only a JSON array of scores."),
+                new ChatMessage(ChatRole.System,
+                    "You are a strict relevance ranker with verbal reasoning. Output only a JSON array of {score, rationale, confidence, suggestion} objects."),
                 new ChatMessage(ChatRole.User, sb.ToString())
             ], cancellationToken: ct).ConfigureAwait(false);
 
             var text = response.Text?.Trim() ?? "";
-            List<double>? scores;
+            List<AnnotationResponseItem>? items;
             try
             {
-                scores = JsonSerializer.Deserialize<List<double>>(text);
+                items = JsonSerializer.Deserialize<List<AnnotationResponseItem>>(text);
             }
             catch (JsonException ex)
             {
-                _logger.LogWarning(ex, "Reranker: LLM returned invalid JSON scores");
-                scores = null;
+                _logger.LogWarning(ex, "Reranker: LLM returned invalid JSON annotations, falling back to scores");
+                items = null;
             }
 
-            if (scores != null && scores.Count == candidates.Count)
+            if (items != null && items.Count == candidates.Count)
             {
                 var results = new List<RankedResult>();
                 for (int i = 0; i < candidates.Count; i++)
                 {
-                    var llmScore = (float)Math.Clamp(scores[i] / 10.0, 0, 1);
+                    var llmScore = (float)Math.Clamp(items[i].Score / 10.0, 0, 1);
+                    var confidence = ParseConfidence(items[i].Confidence);
+                    var ann = new VerbalAnnotation
+                    {
+                        Score = llmScore,
+                        Rationale = items[i].Rationale ?? "",
+                        Confidence = confidence,
+                        Suggestion = items[i].Suggestion,
+                        SourceId = $"{candidates[i].node.Kind}:{candidates[i].node.Name}"
+                    };
+                    annotationsList.Add(ann);
                     results.Add(new RankedResult(
                         candidates[i].node,
                         candidates[i].embeddingScore,
                         llmScore,
                         i + 1,
-                        effectiveWeights));
+                        effectiveWeights) { Annotation = ann });
                 }
-                return results.OrderByDescending(r => r.BlendedScore).ToList();
+                var sorted = results.OrderByDescending(r => r.BlendedScore).ToList();
+                return (sorted, MakeSet(query, sorted
+                    .Select(r => r.Annotation)
+                    .Where(a => a != null)
+                    .Cast<VerbalAnnotation>()
+                    .ToList()));
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "LLM reranking failed, falling back to embedding scores");
+            _logger.LogWarning(ex, "Verbal-R3 reranking failed, falling back to embedding scores");
         }
 
-        return candidates.Select((c, i) => new RankedResult(c.node, c.embeddingScore, c.embeddingScore, i + 1, effectiveWeights)).ToList();
+        // Fallback: create annotations from embedding scores
+        var fallbackResults = candidates.Select((c, i) =>
+        {
+            var ann = new VerbalAnnotation
+            {
+                Score = c.embeddingScore,
+                Rationale = "LLM reranking不可用，使用嵌入相似度作为代理",
+                Confidence = AnnotationConfidence.Low,
+                SourceId = $"{c.node.Kind}:{c.node.Name}"
+            };
+            annotationsList.Add(ann);
+            return new RankedResult(c.node, c.embeddingScore, c.embeddingScore, i + 1, effectiveWeights) { Annotation = ann };
+        }).ToList();
+        return (fallbackResults, MakeSet(query, annotationsList));
     }
+
+    private static VerbalAnnotationSet MakeSet(string query, List<VerbalAnnotation> annotations)
+        => new() { Query = query, Annotations = annotations };
+
+    private static AnnotationConfidence ParseConfidence(string? confidence)
+        => confidence?.ToLowerInvariant() switch
+        {
+            "high" => AnnotationConfidence.High,
+            "medium" => AnnotationConfidence.Medium,
+            "low" => AnnotationConfidence.Low,
+            _ => AnnotationConfidence.Medium
+        };
+
+    /// <summary>Internal DTO for JSON deserialization of verbal annotation items.</summary>
+    private sealed record AnnotationResponseItem(
+        double Score,
+        string? Rationale,
+        string? Confidence,
+        string? Suggestion);
 
     private static string GetNodeText(NodeRow node)
     {
@@ -238,4 +317,7 @@ public sealed record RankedResult(
 {
     private readonly RerankerWeights _weights = Weights ?? new RerankerWeights();
     public float BlendedScore => EmbeddingScore * _weights.EmbeddingWeight + LLMScore * _weights.LLMWeight;
+
+    /// <summary>Optional Verbal-R3 verbal annotation for this result.</summary>
+    public VerbalAnnotation? Annotation { get; init; }
 }

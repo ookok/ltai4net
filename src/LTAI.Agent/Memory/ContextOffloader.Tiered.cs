@@ -22,7 +22,7 @@ partial class ContextOffloader
         OffloadTier tier,
         int headTailChars = 200)
     {
-        if (!ShouldOffload(text)) return text;
+        if (!ShouldOffloadAdaptive(text)) return text;
 
         switch (tier)
         {
