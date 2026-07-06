@@ -100,13 +100,20 @@ public sealed partial class MemoryRefinery : BackgroundService
             // Step 4: Entity Surfacing — generate reverse QA pairs
             var entityPairs = SurfaceEntities(entry.Content, entry.Wing);
 
-            // Write reflections
+            // Write reflections with source traceback
+            var traceMeta = new Dictionary<string, object>
+            {
+                ["source_drawer_id"] = entry.DrawerId,
+                ["source_wing"] = entry.Wing,
+                ["source_room"] = entry.Room,
+            };
+
             foreach (var (q, a) in verified)
             {
                 var reflection = $"Q: {q}\nA: {a}";
                 await _store.StoreAsync(entry.Wing, "reflection", reflection,
                     role: "system", importance: Math.Min(1.0, entry.Importance * 1.1),
-                    ttlMs: null).ConfigureAwait(false);
+                    ttlMs: null, metadata: traceMeta).ConfigureAwait(false);
                 refinedCount++;
             }
 
@@ -115,7 +122,7 @@ public sealed partial class MemoryRefinery : BackgroundService
                 var reflection = $"Q: {q}\nA: {a}";
                 await _store.StoreAsync(entry.Wing, "reflection", reflection,
                     role: "system", importance: Math.Min(1.0, entry.Importance * 0.9),
-                    ttlMs: null).ConfigureAwait(false);
+                    ttlMs: null, metadata: traceMeta).ConfigureAwait(false);
                 refinedCount++;
             }
         }
@@ -314,9 +321,14 @@ public sealed partial class MemoryRefinery : BackgroundService
                                    $"A: Memory 1: {reflections[i].Content}\n" +
                                    $"Memory 2: {reflections[j].Content}";
 
+                    var crossMeta = new Dictionary<string, object>
+                    {
+                        ["source_drawer_id"] = reflections[i].DrawerId + "," + reflections[j].DrawerId,
+                        ["source_wing"] = wing,
+                    };
                     await _store.StoreAsync(wing, "reflection", crossDoc,
                         role: "system", importance: 0.5,
-                        ttlMs: null).ConfigureAwait(false);
+                        ttlMs: null, metadata: crossMeta).ConfigureAwait(false);
                 }
             }
         }

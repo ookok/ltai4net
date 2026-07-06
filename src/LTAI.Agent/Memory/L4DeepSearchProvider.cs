@@ -11,7 +11,7 @@ namespace LTAI.Agent.Memory;
 [ToolDomain("memory")]
 public sealed class L4DeepSearchProvider : AIContextProvider
 {
-    private const int MaxDrawers = 5;
+    private const int DefaultMaxDrawers = 5;
     private const float MinSimilarity = 0.25f;
     private const int MaxScalingRounds = 3;
     private const double ScalingConfidenceThreshold = 0.5;
@@ -25,18 +25,34 @@ public sealed class L4DeepSearchProvider : AIContextProvider
     private readonly ConcurrentDictionary<int, (DateTime Expiry, AIContext Context)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
 
+    private readonly MadDenoiser _madDenoiser;
+    private readonly MemoryConflictResolver? _conflictResolver;
+    private readonly MmrMemoryFilter? _mmrFilter;
+    private readonly QueryAwareMemoryRouter _router;
+    private readonly SubgraphExpansionService? _subgraphExpander;
+
     public L4DeepSearchProvider(
         PalaceStore store,
         EmbeddingClient embedder,
         EntropyTracker? entropy = null,
         IChatClient? verbalAnnotator = null,
-        ILogger<L4DeepSearchProvider>? logger = null)
+        ILogger<L4DeepSearchProvider>? logger = null,
+        MadDenoiser? madDenoiser = null,
+        MemoryConflictResolver? conflictResolver = null,
+        MmrMemoryFilter? mmrFilter = null,
+        QueryAwareMemoryRouter? router = null,
+        SubgraphExpansionService? subgraphExpander = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _embedder = embedder ?? throw new ArgumentNullException(nameof(embedder));
         _entropy = entropy;
         _verbalAnnotator = verbalAnnotator;
         _logger = logger;
+        _madDenoiser = madDenoiser ?? new MadDenoiser();
+        _conflictResolver = conflictResolver;
+        _mmrFilter = mmrFilter;
+        _router = router ?? new QueryAwareMemoryRouter();
+        _subgraphExpander = subgraphExpander;
     }
 
     public override IReadOnlyList<string> StateKeys => ["L4DeepSearch"];
@@ -76,12 +92,73 @@ public sealed class L4DeepSearchProvider : AIContextProvider
             var effectiveMinSimilarity = _entropy?.GetRoomThreshold(wing)
                 ?? MinSimilarity;
 
+            // ── Mandol Stage 0: Query-adaptive routing (§3.3.1) ──
+            var route = _router.Route(query);
+
             // ── EvoEmbedding-inspired Single-Round Context-Aware Retrieval ──
             // augmented with Verbal-R3 relevance-guided test-time scaling
+            var MaxDrawers = route.MaxDrawers;
             var (ranked, annotations) = await RetrieveWithVerbalScalingAsync(
                 query, queryVec, wing, effectiveMinSimilarity, ct).ConfigureAwait(false);
 
             if (ranked.Count == 0) return new AIContext();
+
+            // ── Mandol Stage 0b: Room-aware result boosting ──
+            if (route.RoomBoosts is { Count: > 0 })
+            {
+                for (int i = 0; i < ranked.Count; i++)
+                {
+                    var (drawer, cs, rrf, tw, ann) = ranked[i];
+                    foreach (var (pattern, boost) in route.RoomBoosts)
+                    {
+                        if (drawer.Room.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+                        {
+                            ranked[i] = (drawer, cs * boost, rrf, tw, ann);
+                            break;
+                        }
+                    }
+                }
+                ranked = ranked.OrderByDescending(r => r.CombinedScore).ToList();
+            }
+
+            // ── Mandol Stage 1: MAD denoising (arXiv:2606.29778 §3.3.2) ──
+            // Use Verbal-R3 annotation score as semantic relevance (Mandol §3.3.2 S_ce),
+            // fallback to CombinedScore when annotations unavailable.
+            if (ranked.Count >= 3)
+            {
+                var denoised = _madDenoiser.Denoise(
+                    ranked.Select(r => (r.Drawer, (double)(r.Annotation?.Score ?? (float)r.CombinedScore))).ToList());
+                var denoisedIds = new HashSet<string>(denoised.Select(d => d.Drawer.DrawerId));
+                ranked = ranked.Where(r => denoisedIds.Contains(r.Drawer.DrawerId)).ToList();
+            }
+
+            // ── Mandol Stage 2: Arbitration-based conflict resolution ──
+            if (ranked.Count >= 2 && _conflictResolver != null)
+            {
+                var resolved = _conflictResolver.Resolve(
+                    ranked.Select(r => (r.Drawer, r.CombinedScore)).ToList());
+                var resolvedIds = new HashSet<string>(resolved.Select(r => r.Drawer.DrawerId));
+                ranked = ranked.Where(r => resolvedIds.Contains(r.Drawer.DrawerId)).ToList();
+            }
+
+            // ── Mandol Stage 3: MMR diversity filter under token budget ──
+            if (ranked.Count > 1 && _mmrFilter != null)
+            {
+                var mmrResults = _mmrFilter.Filter(
+                    ranked.Select(r => (r.Drawer, r.CombinedScore)).ToList(),
+                    query, route.BasicBudget);
+                var mmrIds = new HashSet<string>(mmrResults.Select(r => r.Drawer.DrawerId));
+                ranked = ranked.Where(r => mmrIds.Contains(r.Drawer.DrawerId)).ToList();
+            }
+
+            // ── Mandol Stage 4: Subgraph expansion for multi-hop evidence (§3.3.1) ──
+            var expanded = new List<ExpandedEvidence>();
+            if (ranked.Count > 0 && _subgraphExpander != null && route.EntityBudget > 0)
+            {
+                var drawers = ranked.Select(r => r.Drawer).ToList();
+                expanded = await _subgraphExpander.ExpandAsync(drawers, query, ct)
+                    .ConfigureAwait(false);
+            }
 
             var lines = new List<string>
             {
@@ -123,6 +200,18 @@ public sealed class L4DeepSearchProvider : AIContextProvider
                     if (totalLen + snippet.Length > MemoryBudget.L4MaxTokens * 4) break;
                     lines.Add($"  [{r.Wing}] {snippet}");
                     totalLen += snippet.Length;
+                }
+            }
+
+            // Append expanded graph evidence
+            if (expanded.Count > 0)
+            {
+                lines.Add("\n  ### Subgraph Expansion");
+                foreach (var ev in expanded.Take(3))
+                {
+                    if (totalLen + ev.Content.Length > route.BasicBudget * 4) break;
+                    lines.Add($"  [{ev.Source}] rel={ev.Relevance:F2} {ev.Content}");
+                    totalLen += ev.Content.Length;
                 }
             }
 
@@ -174,7 +263,7 @@ public sealed class L4DeepSearchProvider : AIContextProvider
     {
         var allResults = new List<PalaceStore.Drawer>();
         var seenIds = new HashSet<string>();
-        int currentTopK = MaxDrawers * 3;
+        int currentTopK = DefaultMaxDrawers * 3;
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         for (int round = 0; round < MaxScalingRounds; round++)
@@ -200,7 +289,7 @@ public sealed class L4DeepSearchProvider : AIContextProvider
                     return (Drawer: d, TemporalWeight: temporalWeight, CombinedScore: temporalWeight * importanceBoost);
                 })
                 .OrderByDescending(x => x.CombinedScore)
-                .Take(MaxDrawers * 2)
+                .Take(DefaultMaxDrawers * 2)
                 .ToList();
 
             // Generate verbal annotations for top results
@@ -250,7 +339,7 @@ public sealed class L4DeepSearchProvider : AIContextProvider
                     RrfScore: 0f, TemporalWeight: temporalWeight, Annotation: (VerbalAnnotation?)null);
             })
             .OrderByDescending(x => x.CombinedScore)
-            .Take(MaxDrawers)
+            .Take(DefaultMaxDrawers)
             .ToList();
         return (fallback, null);
     }

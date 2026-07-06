@@ -17,16 +17,22 @@ public sealed class PipelineRunner
     /// Steps with the same index run sequentially in definition order.</summary>
     internal static readonly Dictionary<string, int> DefaultPreStepOrder = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["LoraAdapter"] = 0,
-        ["MemoryCaching(Restore)"] = 1,
-        ["RagContext"] = 2,
-        ["ReflectionAugmented"] = 3,
-        ["ProgressGuard"] = 4,
-        ["GenerationOrder"] = 5,
-        ["ProactiveSuggest"] = 6,
-        ["SafetyCheck"] = 7,
-        ["Router"] = 8,
-        ["ToolExecution"] = 9,
+        ["MetaSkillInjector"] = 0,
+        ["MultiTrajectoryRollout"] = 1,
+        ["DynamicReplan"] = 2,
+        ["LoraAdapter"] = 3,
+        ["MemoryCaching(Restore)"] = 4,
+        ["RagContext"] = 5,
+        ["ReflectionAugmented"] = 6,
+        ["ProgressGuard"] = 7,
+        ["GenerationOrder"] = 8,
+        ["Decomposition"] = 9,
+        ["SADFeedback"] = 10,
+        ["Composition"] = 11,
+        ["ProactiveSuggest"] = 12,
+        ["SafetyCheck"] = 13,
+        ["Router"] = 14,
+        ["ToolExecution"] = 15,
     };
 
     /// <summary>
@@ -41,7 +47,7 @@ public sealed class PipelineRunner
         (1,  false, false, ["MemoryCaching(Save)"]),
         (2,  false, false, ["Compaction"]),
         (3,  false, false, ["DiscoursePlanning"]),
-        (4, true,  false, ["GrammarCheck", "AntiPatternCheck", "QualityGate", "DoDCheck", "ThinkingTag", "AbstentionCheck", "ToolEval"]),
+        (4, true,  false, ["GrammarCheck", "AntiPatternCheck", "AntiPatternPatch", "QualityGate", "DoDCheck", "ThinkingTag", "AbstentionCheck", "ToolEval", "PlanVerification"]),
         (5,  false, false, ["SelfRefine"]),
         (6,  false, true,  ["CriticRepair"]),
         (7,  false, false, ["SelfReflection"]),

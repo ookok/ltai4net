@@ -149,6 +149,10 @@ public sealed partial class ChatAgent
         if (pipelineCtx.GrammarCheckBlocked)
             return "⚠️ Pre-generation checks failed: grammar errors detected in input.";
 
+        // Propagate CompositionPlan to ambient context for ToolFilteringChatClient
+        if (pipelineCtx.TryGet<CompositionPlan>("CompositionPlan", out var pipelinePlan) && pipelinePlan != null)
+            CompositionPlanContext.Current = pipelinePlan;
+
         BackgroundJobService.CurrentSessionId = sessionHandle?.Name ?? traceId;
 
         if (!isSimple && complexity >= _complexityProFastTrack && _proAgent != null)
@@ -190,6 +194,9 @@ public sealed partial class ChatAgent
 
         var r = await _agent.RunAsync(messages, session, cancellationToken: ct).ConfigureAwait(false);
         var text = ApplyBlockedOutput(r.Messages?.LastOrDefault()?.Text ?? "");
+
+        // Clear ambient context after LLM call
+        CompositionPlanContext.Reset();
 
         if (sessionHandle != null)
             await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
