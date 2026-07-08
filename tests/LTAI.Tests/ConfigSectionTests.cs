@@ -123,9 +123,15 @@ public class ConfigSectionTests
     }
 
     [Fact]
-    public void EmbeddingClient_NoDefaultModel_EmptyModel()
+    public void EmbeddingClient_DefaultProviders_HaveModelsExceptUnsupported()
     {
-        Assert.All(EmbeddingClient.DefaultProviders, p => Assert.Equal("", p.model));
+        // Providers with a public embedding API must carry a non-empty default model so the
+        // Remote fallback layer can actually succeed; DeepSeek has no public embedding API.
+        Assert.All(EmbeddingClient.DefaultProviders.Where(p => p.name != "DeepSeek"),
+            p => Assert.False(string.IsNullOrEmpty(p.model), $"{p.name} should declare a default embedding model"));
+        var deepseek = EmbeddingClient.DefaultProviders.FirstOrDefault(p => p.name == "DeepSeek");
+        if (deepseek.name != null)
+            Assert.True(string.IsNullOrEmpty(deepseek.model), "DeepSeek has no public embedding API");
     }
 
     [Fact]

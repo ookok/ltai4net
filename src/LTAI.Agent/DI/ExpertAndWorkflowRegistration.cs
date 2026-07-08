@@ -192,7 +192,8 @@ public static partial class ServiceCollectionExtensions
                 return null!;
             }
 
-            return OpenAIChatClientFactory.Create(steer.Endpoint, steer.Model, steerKey);
+            var client = OpenAIChatClientFactory.Create(steer.Endpoint, steer.Model, steerKey);
+            return LTAI.AI.ServiceCollectionExtensions.WrapWithSafeChatClient(sp, client);
         });
 
         services.AddSingleton<BackgroundJobService>();

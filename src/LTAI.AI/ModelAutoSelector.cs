@@ -306,10 +306,10 @@ public sealed class ModelAutoSelectHostedService : BackgroundService
     private readonly ProviderRegistry _registry;
     private readonly IOptionsMonitor<LTAIOptions> _opts;
     private readonly ILogger<ModelAutoSelectHostedService> _logger;
-    private static AutoSelectResult? s_latestResult;
+    private AutoSelectResult? _latestResult;
 
     /// <summary>The most recent auto-selection result, or null if not yet run.</summary>
-    public static AutoSelectResult? LatestResult => Volatile.Read(ref s_latestResult);
+    public AutoSelectResult? LatestResult => Volatile.Read(ref _latestResult);
 
     public ModelAutoSelectHostedService(ModelAutoSelector selector, ProviderRegistry registry,
         IOptionsMonitor<LTAIOptions> opts, ILogger<ModelAutoSelectHostedService> logger)
@@ -361,7 +361,7 @@ public sealed class ModelAutoSelectHostedService : BackgroundService
             if (result != null)
             {
                 // Store result for MultiProviderChatClient et al.
-                Volatile.Write(ref s_latestResult, result);
+                Volatile.Write(ref _latestResult, result);
             }
 
             // Periodic re-evaluation
@@ -369,11 +369,11 @@ public sealed class ModelAutoSelectHostedService : BackgroundService
             {
                 await Task.Delay(TimeSpan.FromMinutes(cfg.RefreshIntervalMin), stoppingToken).ConfigureAwait(false);
 
-                var current = Volatile.Read(ref s_latestResult);
+                var current = Volatile.Read(ref _latestResult);
                 if (current == null) continue;
                 var updated = await _selector.ReEvaluateAsync(current, stoppingToken).ConfigureAwait(false);
                 if (updated != null)
-                    Volatile.Write(ref s_latestResult, updated);
+                    Volatile.Write(ref _latestResult, updated);
             }
         }
         catch (OperationCanceledException)

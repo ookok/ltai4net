@@ -151,6 +151,29 @@ try
         app.MapOpenApi();
     }
 
+    // ── DevUI dashboard (development only) ──
+    // Lightweight HTML dashboard surfacing the LTAI-specific DevUI REST surface
+    // (/ltai/v1/entities, /ltai/v1/jobs, /ltai/v1/workflows). Fixes the previously
+    // dead /devui link referenced by LTAI.Desktop WorkflowsView.NavigateToDevUI.
+    if (app.Environment.IsDevelopment())
+    {
+        app.MapGet("/devui", () => Results.Content("""
+            <!doctype html><html lang="zh"><head><meta charset="utf-8">
+            <title>LTAI DevUI</title><style>body{font-family:monospace;background:#0d1117;color:#c9d1d9;padding:2rem}
+            h1{color:#58a6ff}section{margin-bottom:2rem}pre{background:#161b22;padding:1rem;overflow:auto;max-height:24rem;border-radius:6px}
+            a{color:#58a6ff}</style></head><body>
+            <h1>LTAI DevUI</h1>
+            <p>开发诊断面板（development only）。以下数据来自 LTAI 专用 DevUI REST 接口。</p>
+            <section><h2>Agents (<a href="/ltai/v1/entities">/ltai/v1/entities</a>)</h2><pre id="entities">loading…</pre></section>
+            <section><h2>Jobs (<a href="/ltai/v1/jobs">/ltai/v1/jobs</a>)</h2><pre id="jobs">loading…</pre></section>
+            <section><h2>Workflows (<a href="/ltai/v1/workflows">/ltai/v1/workflows</a>)</h2><pre id="workflows">loading…</pre></section>
+            <script>
+            async function load(id,url){try{const r=await fetch(url);const j=await r.json();document.getElementById(id).textContent=JSON.stringify(j,null,2);}catch(e){document.getElementById(id).textContent='error: '+e;}}
+            load('entities','/ltai/v1/entities');load('jobs','/ltai/v1/jobs');load('workflows','/ltai/v1/workflows');
+            </script></body></html>
+            """, "text/html; charset=utf-8"));
+    }
+
     // ── P9.0: LTAIDevUIService shared REST surface ──
     // Backed by the same service used by LTAI.TUI (/dashboard) and
     // LTAI.Desktop (WebView2 / browser-launched DevUI). Exposes:

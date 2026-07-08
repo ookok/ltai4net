@@ -143,7 +143,7 @@ public sealed class DFSDToolExecutorEdgeTests
     public async Task MaxDepth_ReturnsLimitMessage()
     {
         var stub = new StubToolRegistry();
-        var llm = new EchoChatClient("TOOL: Search(q=test)\nTOOL: Read(path=x)");
+        var llm = new EdgeEchoChatClient("TOOL: Search(q=test)\nTOOL: Read(path=x)");
         var exec = new DFSDToolExecutor(stub, llm, maxDepth: 1, maxNodes: 5);
         var result = await exec.ExecuteAsync("find x", default);
         Assert.False(result.Success);
@@ -154,7 +154,7 @@ public sealed class DFSDToolExecutorEdgeTests
     public async Task EmptyQuery_DoesNotCrash()
     {
         var stub = new StubToolRegistry();
-        var llm = new EchoChatClient("FINAL: ok");
+        var llm = new EdgeEchoChatClient("FINAL: ok");
         var exec = new DFSDToolExecutor(stub, llm, maxDepth: 5, maxNodes: 10);
         var result = await exec.ExecuteAsync("", default);
         Assert.True(result.Success);
@@ -206,7 +206,7 @@ public sealed class SelfCritiqueGeneratorEdgeTests
     [Fact]
     public async Task EchoWithEmptyCritique_NoIssues()
     {
-        var critic = new EchoChatClient("{}");
+        var critic = new EdgeEchoChatClient("{}");
         var gen = new SelfCritiqueGenerator(critic);
         var result = await gen.GenerateCritiqueAsync("q", "out", [], default);
         Assert.Empty(result);
@@ -215,7 +215,7 @@ public sealed class SelfCritiqueGeneratorEdgeTests
     [Fact]
     public async Task EmptyToolResults_DoesNotCrash()
     {
-        var critic = new EchoChatClient("{\"verbosity\": \"too long\"}");
+        var critic = new EdgeEchoChatClient("{\"verbosity\": \"too long\"}");
         var gen = new SelfCritiqueGenerator(critic);
         var result = await gen.GenerateCritiqueAsync("q", "x", [], default);
         Assert.NotEmpty(result);
@@ -235,7 +235,7 @@ public sealed class ReflectionGeneratorEdgeTests
     [Fact]
     public async Task EmptyEvaluation_DoesNotCrash()
     {
-        var llm = new EchoChatClient("## Reflection\n## Causal\n## Corrective\n## Preventive");
+        var llm = new EdgeEchoChatClient("## Reflection\n## Causal\n## Corrective\n## Preventive");
         var gen = new ReflectionGenerator(llm);
         var result = await gen.GenerateReflectionAsync("q", "bad", "", default);
         Assert.NotNull(result);
@@ -245,7 +245,7 @@ public sealed class ReflectionGeneratorEdgeTests
     public async Task VeryLongQuery_Truncated()
     {
         var longQ = new string('x', 10000);
-        var llm = new EchoChatClient("## Reflection\n## Causal\n## Corrective\n## Preventive");
+        var llm = new EdgeEchoChatClient("## Reflection\n## Causal\n## Corrective\n## Preventive");
         var gen = new ReflectionGenerator(llm);
         var result = await gen.GenerateReflectionAsync(longQ, "bad", "eval", default);
         Assert.NotNull(result);
@@ -258,7 +258,7 @@ public sealed class ReWOOPlanningEdgeTests
     public async Task ShortQuery_SkipsPlanning()
     {
         var reg = new StubToolRegistry();
-        var inner = new EchoChatClient("fast answer");
+        var inner = new EdgeEchoChatClient("fast answer");
         var client = new ReWOOPlanningChatClient(inner, inner, inner, null, reg);
         var resp = await client.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "hi")]);
@@ -269,8 +269,8 @@ public sealed class ReWOOPlanningEdgeTests
     public async Task PlannerThrows_FallsBack()
     {
         var reg = new StubToolRegistry();
-        var inner = new EchoChatClient("fallback");
-        var broken = new EchoChatClient("") { ThrowOnCall = true };
+        var inner = new EdgeEchoChatClient("fallback");
+        var broken = new EdgeEchoChatClient("") { ThrowOnCall = true };
         var client = new ReWOOPlanningChatClient(inner, broken, inner, null, reg);
         var resp = await client.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "this is a long query that should trigger planning")]);
@@ -278,12 +278,12 @@ public sealed class ReWOOPlanningEdgeTests
     }
 }
 
-public sealed class EchoChatClient : IChatClient
+public sealed class EdgeEchoChatClient : IChatClient
 {
     private readonly string _response;
     public bool ThrowOnCall { get; set; }
 
-    public EchoChatClient(string response) => _response = response;
+    public EdgeEchoChatClient(string response) => _response = response;
     public void Dispose() { }
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
     public object? GetService(Type serviceType, string? serviceKey) => null;

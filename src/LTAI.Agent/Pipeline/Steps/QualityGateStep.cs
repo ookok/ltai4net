@@ -51,7 +51,9 @@ public sealed class QualityGateStep : IPipelineStep
 
     public async Task<MessageContext> ProcessAsync(MessageContext context)
     {
-        var lastMsg = context.Messages.LastOrDefault(m => m.Role == ChatRole.Assistant);
+        ChatMessage? lastMsg;
+        lock (context.MessagesLock)
+            lastMsg = context.Messages.LastOrDefault(m => m.Role == ChatRole.Assistant);
         if (lastMsg == null || string.IsNullOrWhiteSpace(lastMsg.Text))
             return context;
 
@@ -73,7 +75,8 @@ public sealed class QualityGateStep : IPipelineStep
         }
         else
         {
-            context.QualityGateBlocked = false;
+            // Preserve any block set by a parallel step (e.g. ToolEval) — never clear it here.
+            context.QualityGateBlocked = context.QualityGateBlocked || !result.Passed;
             _logger.LogDebug("QualityGate: passed (score={Score:P1}, dims={Dims})",
                 result.Score,
                 string.Join(",", result.Dimensions.Select(d => $"{d.Name}:{d.Score:F1}")));

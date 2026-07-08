@@ -179,13 +179,18 @@ public sealed class CriticRepairStep : IPipelineStep
 
         if (context.QualityGateBlocked)
         {
-            if (context.TryGet<Dictionary<string, double>>("QualityGateScores", out var scores) && scores?.Count > 0)
+            if (context.TryGet<QualityGateResult>("QualityGateResult", out var qg) && qg != null)
             {
-                var lowDims = scores.Where(kv => kv.Value < 5.0).Select(kv => $"  - {kv.Key}: {kv.Value:F1}/10").ToList();
+                var lowDims = qg.Dimensions
+                    .Where(d => d.Score < 5.0)
+                    .Select(d => $"  - {d.Name}: {d.Score:F1}/10")
+                    .ToList();
                 failures.Add(new CriticFailure(
                     Dimension: "QualityGate",
                     Severity: FailureSeverity.Warning,
-                    Description: $"Quality score below threshold (dimensions: {string.Join(", ", lowDims.Select(d => d.Trim()[..d.Trim().IndexOf(':')]))})",
+                    Description: lowDims.Count > 0
+                        ? $"Quality score below threshold (score={qg.Score:P1}, low dims: {string.Join(", ", lowDims.Select(d => d.Trim()[..d.Trim().IndexOf(':')]))})"
+                        : $"Quality gate not passed (score={qg.Score:P1})",
                     Details: lowDims,
                     FixHint: "Improve response quality: add structure, remove hedge words, ensure completeness."));
             }
@@ -202,7 +207,7 @@ public sealed class CriticRepairStep : IPipelineStep
 
         if (context.DoDBlocked)
         {
-            if (context.TryGet<List<string>>("DoDFailures", out var dodFailures) && dodFailures?.Count > 0)
+            if (context.TryGet<List<string>>("DoDFailedCriteria", out var dodFailures) && dodFailures?.Count > 0)
             {
                 failures.Add(new CriticFailure(
                     Dimension: "DoD",

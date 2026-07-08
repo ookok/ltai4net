@@ -28,7 +28,8 @@
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
     <!-- P6: MAF protocol packages (prebuilt DLL support) -->
-    <!-- NOTE: Microsoft.Agents.AI, .Abstractions, .Hosting, .Hosting.OpenAI are provided transitively by LTAI.Agent -->
+    <!-- NOTE: Microsoft.Agents.AI, .Abstractions, .Hosting, .OpenAI are provided transitively by LTAI.Agent -->
+    <!-- Microsoft.Agents.AI.Hosting.OpenAI (AddOpenAIResponses/MapOpenAI*) must be referenced directly -->
     <!-- Only reference the Hosting protocol DLLs not in LTAI.Agent -->
     <Reference Include="Microsoft.Agents.AI.Hosting.AspNetCore"      HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.AspNetCore.dll"      Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.AspNetCore.dll')" />
     <Reference Include="Microsoft.Agents.AI.Hosting.A2A"              HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.A2A.dll"              Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.A2A.dll')" />
@@ -36,6 +37,7 @@
     <Reference Include="Microsoft.Agents.AI.Hosting.AGUI.AspNetCore"  HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.AGUI.AspNetCore.dll"  Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.AGUI.AspNetCore.dll')" />
     <Reference Include="Microsoft.Agents.AI.Harness"                 HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Harness.dll"                 Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Harness.dll')" />
     <Reference Include="Microsoft.Agents.AI.OpenAI"                  HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.OpenAI.dll"                  Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.OpenAI.dll')" />
+    <Reference Include="Microsoft.Agents.AI.Hosting.OpenAI"         HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.OpenAI.dll"         Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.OpenAI.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting.AspNetCore\Microsoft.Agents.AI.Hosting.AspNetCore.csproj"    Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.AspNetCore.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting.A2A\Microsoft.Agents.AI.Hosting.A2A.csproj"                Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.A2A.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting.A2A.AspNetCore\Microsoft.Agents.AI.Hosting.A2A.AspNetCore.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.A2A.AspNetCore.dll')" />

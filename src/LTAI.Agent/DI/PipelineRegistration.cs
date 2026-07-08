@@ -58,6 +58,16 @@ public static partial class ServiceCollectionExtensions
         services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<SafetyCheckStep>());
         services.AddSingleton<ToolExecutionStep>();
         services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<ToolExecutionStep>());
+
+        // Pre-generation steps that were declared in the step plan but previously
+        // unregistered (silently skipped). Their dependencies are either registered
+        // or nullable, so registration is safe.
+        services.AddSingleton<RagContextStep>();
+        services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<RagContextStep>());
+        services.AddSingleton<ReflectionAugmentedStep>();
+        services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<ReflectionAugmentedStep>());
+        services.AddSingleton<ProactiveSuggestStep>();
+        services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<ProactiveSuggestStep>());
         services.AddSingleton<MemoryCachingStep>(sp =>
             new MemoryCachingStep(
                 sp.GetRequiredService<Caching.IMemoryCachingStore>(),
@@ -66,6 +76,8 @@ public static partial class ServiceCollectionExtensions
         services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<MemoryCachingStep>());
 
         // ── Post-generation pipeline steps ──
+        services.AddSingleton<DeltaAnchorStep>();
+        services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<DeltaAnchorStep>());
         services.AddSingleton<CompactionStep>();
         services.AddSingleton<IPipelineStep>(sp => sp.GetRequiredService<CompactionStep>());
         services.AddSingleton<GrammarCheckStep>(sp =>

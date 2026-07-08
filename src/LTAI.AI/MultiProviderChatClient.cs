@@ -42,8 +42,8 @@ public sealed class MultiProviderChatClient : IChatClient
     public IEnumerable<string> RegisteredProviders => _providers.RegisteredProviders;
     public string? ActiveProvider { get => _providers.ActiveProvider; set => _providers.ActiveProvider = value; }
 
-    public IChatClient GetL3Client() => _providers.GetL3Client();
-    public IChatClient GetL2Client() => _providers.GetL2Client();
+    public IChatClient? GetL3Client() => _providers.GetL3Client();
+    public IChatClient? GetL2Client() => _providers.GetL2Client();
 
     public MultiProviderChatClient(
         LTAIOptions options,
@@ -65,8 +65,8 @@ public sealed class MultiProviderChatClient : IChatClient
         {
             foreach (var (k, v) in options.AI.DegradationChain)
             {
-                _providers.Register(k, null!); // seed chain; clients registered via Register()
-                // Also set degradation chain on ProviderClientManager if not already configured
+                // Set degradation chain mapping only. Do NOT seed a null client here:
+                // storing null in the clients dictionary would later throw NRE on Dispose / routing.
                 if (!_providers.HasDegradation(k))
                     _providers.SetDegradation(k, v);
             }

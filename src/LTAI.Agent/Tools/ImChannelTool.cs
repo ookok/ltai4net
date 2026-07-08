@@ -118,7 +118,7 @@ public sealed class ImChannelTool : IDisposable
 
     private async Task<string> SendWeChatAsync(ImChannelConfig cfg, string userId, string message)
     {
-        return "WeChat channel requires iLink SDK integration (TODO)";
+        return "Error: WeChat channel is not implemented (iLink SDK integration pending)";
     }
 
     private async Task<string> GetFeishuTokenAsync(ImChannelConfig cfg)

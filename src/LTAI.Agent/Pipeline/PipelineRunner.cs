@@ -20,7 +20,6 @@ public sealed class PipelineRunner
         ["MetaSkillInjector"] = 0,
         ["MultiTrajectoryRollout"] = 1,
         ["DynamicReplan"] = 2,
-        ["LoraAdapter"] = 3,
         ["MemoryCaching(Restore)"] = 4,
         ["RagContext"] = 5,
         ["ReflectionAugmented"] = 6,
@@ -31,7 +30,6 @@ public sealed class PipelineRunner
         ["Composition"] = 11,
         ["ProactiveSuggest"] = 12,
         ["SafetyCheck"] = 13,
-        ["Router"] = 14,
         ["ToolExecution"] = 15,
     };
 
@@ -47,11 +45,15 @@ public sealed class PipelineRunner
         (1,  false, false, ["MemoryCaching(Save)"]),
         (2,  false, false, ["Compaction"]),
         (3,  false, false, ["DiscoursePlanning"]),
-        (4, true,  false, ["GrammarCheck", "AntiPatternCheck", "AntiPatternPatch", "QualityGate", "DoDCheck", "ThinkingTag", "AbstentionCheck", "ToolEval", "PlanVerification"]),
-        (5,  false, false, ["SelfRefine"]),
-        (6,  false, true,  ["CriticRepair"]),
-        (7,  false, false, ["SelfReflection"]),
-        (8,  false, false, ["Retrospective"]),
+        // GrammarCheck runs first (sequentially) because QualityGate and DoDCheck read
+        // GrammarCheckBlocked / "GrammarErrors" set by it. Running them in the same parallel
+        // group caused a timing race that silently dropped syntax-error detection.
+        (4,  false, false, ["GrammarCheck"]),
+        (5,  true,  false, ["AntiPatternCheck", "AntiPatternPatch", "QualityGate", "DoDCheck", "ThinkingTag", "AbstentionCheck", "ToolEval", "PlanVerification"]),
+        (6,  false, true,  ["SelfRefine"]),
+        (7,  false, true,  ["CriticRepair"]),
+        (8,  false, true,  ["SelfReflection"]),
+        (9,  false, false, ["Retrospective"]),
     ];
 
     private sealed record StepEntry(
@@ -126,13 +128,15 @@ public sealed class PipelineRunner
     {
         foreach (var group in _postGroups)
         {
+            // Once the pipeline is blocked, normal post-processing groups are skipped.
+            // AlwaysRun groups (SelfRefine / CriticRepair / SelfReflection) still execute so
+            // they can auto-repair or learn from the blocked response instead of being skipped.
+            if (!group.AlwaysRun && ShouldBreak(context))
+                continue;
+
             context = group.IsParallel
                 ? await RunParallelGroupAsync(context, group.Steps).ConfigureAwait(false)
-                : await RunSequentialGroupAsync(context, group.Steps).ConfigureAwait(false);
-
-            // AlwaysRun groups (e.g. CriticRepair) execute even when pipeline is blocked,
-            // so they can synthesize repair feedback before the pipeline breaks.
-            if (!group.AlwaysRun && ShouldBreak(context)) break;
+                : await RunSequentialGroupAsync(context, group.Steps, group.AlwaysRun).ConfigureAwait(false);
         }
         return context;
     }
@@ -158,11 +162,11 @@ public sealed class PipelineRunner
     }
 
     private async Task<MessageContext> RunSequentialGroupAsync(
-        MessageContext context, IReadOnlyList<StepEntry> steps)
+        MessageContext context, IReadOnlyList<StepEntry> steps, bool ignoreBreak = false)
     {
         foreach (var step in steps)
         {
-            if (ShouldBreak(context)) break;
+            if (!ignoreBreak && ShouldBreak(context)) break;
 
             var sw = Stopwatch.StartNew();
             try

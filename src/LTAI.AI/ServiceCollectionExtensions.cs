@@ -165,7 +165,7 @@ public static class ServiceCollectionExtensions
             // L2
             var l2Cfg = opts.AI.L2;
             string? l2Model = !string.IsNullOrEmpty(l2Cfg?.Model) ? l2Cfg.Model : null;
-            if (l2Model == null) l2Model = ModelAutoSelectHostedService.LatestResult?.L2;
+            if (l2Model == null) l2Model = sp.GetService<ModelAutoSelectHostedService>()?.LatestResult?.L2;
             if (l2Model == null)
             {
                 var scoring = sp.GetRequiredService<ModelScoringEngine>();
@@ -184,7 +184,7 @@ public static class ServiceCollectionExtensions
             // L3
             var l3Cfg = opts.AI.L3;
             string? l3Model = !string.IsNullOrEmpty(l3Cfg?.Model) ? l3Cfg.Model : null;
-            if (l3Model == null) l3Model = ModelAutoSelectHostedService.LatestResult?.L3;
+            if (l3Model == null) l3Model = sp.GetService<ModelAutoSelectHostedService>()?.LatestResult?.L3;
             if (l3Model == null)
             {
                 var scoring = sp.GetRequiredService<ModelScoringEngine>();
@@ -225,19 +225,47 @@ public static class ServiceCollectionExtensions
                 }
             }
 
+            // Activate cross-provider degradation chain targets so "l1" -> "other-provider"
+            // actually has a registered client (previously targets not explicitly registered
+            // were dead links skipped by the ranked-provider selector).
+            if (opts.AI.DegradationChain != null)
+            {
+                var registered = new HashSet<string>(router.RegisteredProviders, StringComparer.OrdinalIgnoreCase);
+                foreach (var target in opts.AI.DegradationChain.Values.Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (string.IsNullOrWhiteSpace(target) || registered.Contains(target))
+                        continue;
+                    var targetProvider = registry.FindByName(target)
+                        ?? registry.ActiveProviders.FirstOrDefault(p => string.Equals(p.Name, target, StringComparison.OrdinalIgnoreCase));
+                    if (targetProvider == null || targetProvider.Models.Length == 0)
+                        continue;
+                    var tKey = SecretManager.Get(targetProvider.EnvVar) ?? "";
+                    var tEndpoint = targetProvider.Endpoint!;
+                    var tModel = targetProvider.Models[0].ShortId;
+                    var tClient = targetProvider.ApiFormat == ApiFormat.Anthropic
+                        ? AnthropicChatClientFactory.Create(tModel, tKey)
+                        : OpenAIChatClientFactory.Create(tEndpoint, tModel, tKey);
+                    router.Register(target, tClient);
+                    registered.Add(target);
+                    logger?.LogInformation("Degradation target registered: {Name}/{Model}", target, tModel);
+                }
+            }
+
             return router;
         });
 
         services.AddKeyedSingleton<IChatClient>("l3", (sp, _) =>
         {
             var router = sp.GetRequiredService<MultiProviderChatClient>();
-            return router.GetL3Client();
+            var client = router.GetL3Client() ?? router;
+            return WrapWithSafeChatClient(sp, client);
         });
 
         services.AddKeyedSingleton<IChatClient>("l2", (sp, _) =>
         {
             var router = sp.GetRequiredService<MultiProviderChatClient>();
-            return router.GetL2Client();
+            var client = router.GetL2Client() ?? router;
+            return WrapWithSafeChatClient(sp, client);
         });
 
         services.AddKeyedSingleton<IChatClient>("rewoo", (sp, _) =>
@@ -253,46 +281,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChatClient>(sp =>
         {
             var router = sp.GetRequiredService<MultiProviderChatClient>();
-            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
-
-            if (opts.AI.SkipSafetyChecks)
-            {
-                var env = sp.GetService<IHostEnvironment>();
-                if (env?.IsDevelopment() != true)
-                {
-                    var warnLog = sp.GetService<ILogger<MultiProviderChatClient>>();
-                    warnLog?.LogWarning("SkipSafetyChecks=true in non-Development environment — safety wrapper bypassed");
-                }
-                return router;
-            }
-
-            var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
-            var registry = sp.GetRequiredService<ProviderRegistry>();
-            var primaryProvider = registry.ActiveProviders.FirstOrDefault()
-                ?? registry.ActiveEdgeProviders.FirstOrDefault();
-            var safetyModel = !string.IsNullOrEmpty(opts.AI.Model)
-                ? opts.AI.Model
-                : opts.AI.L1?.Model ?? primaryProvider?.Models.FirstOrDefault()?.ShortId;
-
-            if (string.IsNullOrEmpty(safetyModel))
-            {
-                logger?.LogWarning("SafeChatClient: no safety model found, skipping safety wrapper");
-                return router;
-            }
-
-            var safetyKey = opts.AI.ApiKeyEnv != null
-                ? SecretManager.Get(opts.AI.ApiKeyEnv) ?? ""
-                : primaryProvider != null ? SecretManager.Get(primaryProvider.EnvVar) ?? "" : "";
-            if (string.IsNullOrEmpty(safetyKey))
-            {
-                logger?.LogWarning("SafeChatClient: no API key configured, skipping safety wrapper");
-                return router;
-            }
-
-            var safetyEndpoint = primaryProvider?.Endpoint ?? "https://api.deepseek.com/v1";
-            IChatClient safetyClient = OpenAIChatClientFactory.Create(safetyEndpoint, safetyModel, safetyKey);
-            var wrapped = new LTAI.Core.Safety.SafeChatClient(router, safetyClient, logger);
-            return new MetricsChatClient(wrapped, sp.GetService<ILogger<MetricsChatClient>>());
+            return WrapWithSafeChatClient(sp, router);
         });
 
         // Local ONNX embedder
@@ -345,5 +334,49 @@ public static class ServiceCollectionExtensions
             sp.GetService<IHttpClientFactory>()));
 
         return services;
+    }
+
+    internal static IChatClient WrapWithSafeChatClient(IServiceProvider sp, IChatClient inner)
+    {
+        var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+
+        if (opts.AI.SkipSafetyChecks)
+        {
+            var env = sp.GetService<IHostEnvironment>();
+            if (env?.IsDevelopment() != true)
+            {
+                var warnLog = sp.GetService<ILogger<MultiProviderChatClient>>();
+                warnLog?.LogWarning("SkipSafetyChecks=true in non-Development environment — safety wrapper bypassed");
+            }
+            return inner;
+        }
+
+        var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
+        var registry = sp.GetRequiredService<ProviderRegistry>();
+        var primaryProvider = registry.ActiveProviders.FirstOrDefault()
+            ?? registry.ActiveEdgeProviders.FirstOrDefault();
+        var safetyModel = !string.IsNullOrEmpty(opts.AI.Model)
+            ? opts.AI.Model
+            : opts.AI.L1?.Model ?? primaryProvider?.Models.FirstOrDefault()?.ShortId;
+
+        if (string.IsNullOrEmpty(safetyModel))
+        {
+            logger?.LogWarning("SafeChatClient: no safety model found, skipping safety wrapper");
+            return inner;
+        }
+
+        var safetyKey = opts.AI.ApiKeyEnv != null
+            ? SecretManager.Get(opts.AI.ApiKeyEnv) ?? ""
+            : primaryProvider != null ? SecretManager.Get(primaryProvider.EnvVar) ?? "" : "";
+        if (string.IsNullOrEmpty(safetyKey))
+        {
+            logger?.LogWarning("SafeChatClient: no API key configured, skipping safety wrapper");
+            return inner;
+        }
+
+        var safetyEndpoint = primaryProvider?.Endpoint ?? "https://api.deepseek.com/v1";
+        IChatClient safetyClient = OpenAIChatClientFactory.Create(safetyEndpoint, safetyModel, safetyKey);
+        var wrapped = new LTAI.Core.Safety.SafeChatClient(inner, safetyClient, logger);
+        return new MetricsChatClient(wrapped, sp.GetService<ILogger<MetricsChatClient>>());
     }
 }

@@ -95,17 +95,16 @@ public sealed partial class GrammarCheckStep : IPipelineStep
                     }
                 }
 
-                // 第 2 层: RuleEngine check (text-wide, any written files)
+                // 第 2 层: RuleEngine check — 真实规则匹配（仅当文件内容命中规则时才报告）
                 if (_options.EnableRuleEngine && _ruleEngine != null && syntaxErrors.Count == 0)
                 {
                     foreach (var filePath in writtenFiles)
                     {
                         var content = File.ReadAllText(filePath);
-                        foreach (var rule in _ruleEngine.Rules)
+                        foreach (var m in _ruleEngine.Match(filePath, content))
                         {
-                            typeErrors.Add(new GrammarError(filePath, 0, 0,
-                                MapRuleSeverity(rule.Severity), "rule", rule.Id ?? "RULE-UNKNOWN",
-                                rule.MessageTemplate ?? rule.Description ?? "不匹配的语法结构", "ReviewRuleEngine"));
+                            typeErrors.Add(new GrammarError(filePath, m.LineNumber, 0,
+                                MapRuleSeverity(m.Severity), "rule", m.RuleId, m.Message, "ReviewRuleEngine"));
                         }
                     }
                 }
@@ -122,26 +121,29 @@ public sealed partial class GrammarCheckStep : IPipelineStep
                     }
                 }
 
-                // 第 4 层: LSP diagnostics (multi-language, async)
+                // 第 4 层: LSP diagnostics (multi-language, real diagnostics from running servers)
                 if (_options.EnableLspDiag && syntaxErrors.Count == 0 && _lspManager != null)
                 {
-                    // LSP diagnostics available via _lspManager.GetDiagnosticsAsync
                     try
                     {
-                        foreach (var filePath in writtenFiles)
+                        var lspDiags = _lspManager.GetDiagnostics();
+                        foreach (var (filePath, diag) in lspDiags)
                         {
-                            var ext = Path.GetExtension(filePath).TrimStart('.').ToLowerInvariant();
-                            var lspDiag = _lspManager.GetType().GetMethod("GetDiagnosticsAsync");
-                            if (lspDiag != null)
+                            if (!writtenFiles.Contains(filePath, StringComparer.OrdinalIgnoreCase))
+                                continue;
+                            var sev = diag.Severity switch
                             {
-                                var task = (Task<IReadOnlyList<object>>?)lspDiag.Invoke(_lspManager, [filePath, ext]);
-                                // LSP diagnostics — best-effort, non-blocking on errors
-                            }
+                                1 => GrammarErrorSeverity.Error,
+                                2 => GrammarErrorSeverity.Warning,
+                                _ => GrammarErrorSeverity.Info,
+                            };
+                            typeErrors.Add(new GrammarError(filePath, diag.Line, diag.Col,
+                                sev, "lsp", diag.Code ?? "LSP", diag.Message, diag.Source ?? "LSP"));
                         }
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        _logger.LogDebug("LSP diagnostics unavailable");
+                        _logger.LogDebug(ex, "LSP diagnostics unavailable");
                     }
                 }
 

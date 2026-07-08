@@ -18,10 +18,12 @@ public sealed class EmbeddingClient : IDisposable
     /// <summary>Embedding providers. Endpoint/model from KnownKeys (source of truth).</summary>
     public static readonly (string envVar, string endpoint, string model, string name, int dim)[] DefaultProviders =
     {
-        ("DEEPSEEK_API_KEY",     "https://api.deepseek.com/v1",              "",          "DeepSeek", 1024),
-        ("OPENAI_API_KEY",       "https://api.openai.com/v1",                "",          "OpenAI", 1536),
-        ("SILICONFLOW_API_KEY",  "https://api.siliconflow.cn/v1",           "",          "SiliconFlow", 1024),
-        ("DASHSCOPE_API_KEY",    "https://dashscope.aliyuncs.com/compatible-mode/v1", "", "Aliyun", 1536),
+        // DeepSeek offers no public embedding API — left empty and excluded from the
+        // available set below so a doomed request with model="" is never sent.
+        ("DEEPSEEK_API_KEY",     "https://api.deepseek.com/v1",              "",                       "DeepSeek", 1024),
+        ("OPENAI_API_KEY",       "https://api.openai.com/v1",                "text-embedding-3-small", "OpenAI", 1536),
+        ("SILICONFLOW_API_KEY",  "https://api.siliconflow.cn/v1",           "BAAI/bge-m3",            "SiliconFlow", 1024),
+        ("DASHSCOPE_API_KEY",    "https://dashscope.aliyuncs.com/compatible-mode/v1", "text-embedding-v3", "Aliyun", 1536),
     };
 
     private readonly IHttpClientFactory _httpFactory;
@@ -67,7 +69,7 @@ public sealed class EmbeddingClient : IDisposable
 
         _availableProviders = DefaultProviders
             .Select(p => (p.name, p.endpoint, p.model, p.dim, apiKey: LTAI.Core.Configuration.SecretManager.Get(p.envVar) ?? ""))
-            .Where(p => !string.IsNullOrEmpty(p.apiKey))
+            .Where(p => !string.IsNullOrEmpty(p.apiKey) && !string.IsNullOrEmpty(p.model))
             .ToArray();
         _local = local;
 

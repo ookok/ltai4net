@@ -74,11 +74,15 @@ public sealed class ProviderClientManager
     public IChatClient? GetClient(string name) =>
         _clients.TryGetValue(name, out var c) ? c : null;
 
-    public IChatClient GetL3Client() =>
-        _clients.TryGetValue("l3", out var c) ? c : _clients["l1"];
+    public IChatClient? GetL3Client() =>
+        _clients.TryGetValue("l3", out var c) ? c
+        : _clients.TryGetValue("l1", out var l1) ? l1
+        : null;
 
-    public IChatClient GetL2Client() =>
-        _clients.TryGetValue("l2", out var c) ? c : _clients["l1"];
+    public IChatClient? GetL2Client() =>
+        _clients.TryGetValue("l2", out var c) ? c
+        : _clients.TryGetValue("l1", out var l1) ? l1
+        : null;
 
     /// <summary>Ranked providers with edge-first priority.</summary>
     public IEnumerable<string> RankedProviders(string preferred)

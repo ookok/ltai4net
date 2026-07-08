@@ -50,7 +50,7 @@ dotnet run --project src\LTAI.Cli -- health  # CLI 健康检查
 ```csharp
 services.AddLTAICore();     // 配置、安全、日志
 services.AddLTAIAI();       // LLM 路由器、嵌入
-services.AddLTAIAgent();    // 20 agents、编排、工具
+services.AddLTAIAgent();    // 12 agents（11 领域 + LTAI-Router）、编排、工具
 ```
 
 每个 agent 通过 `AgentDefinitionLoader.GetAgentDefinitions()` 读取 `agents/*.agent.md` 注册为 MAF keyed service。ProviderRegistry 和 ModelAutoSelector 在 DI 启动时自动初始化。
@@ -176,7 +176,7 @@ services.AddSingleton<PipelineRunner>();
 
 ## AgentContextProviderBuilder 实际顺序
 
-`AgentContextProviderBuilder.Build()` 组装 **20 个** `AIContextProvider`（文档注释写 16 个，实际更多），顺序如下：
+`AgentContextProviderBuilder.Build()` 组装 **22 个** `AIContextProvider`（文档注释写 16 个，实际更多），顺序如下：
 
 | 索引 | 提供者 | 类名 | 备注 |
 |------|--------|------|------|
@@ -276,7 +276,7 @@ Web: GET /ltai/v1/workflows
 | `GET /health` | 完整健康检查 |
 | `GET /ready` | K8s readiness probe |
 | `GET /devui` | MAF DevUI（仅 development） |
-| `GET /ltai/v1/entities` | 20 agents LTAIAgentCard |
+| `GET /ltai/v1/entities` | 12 agents LTAIAgentCard |
 | `GET /ltai/v1/jobs` | 后台任务列表（60s 自动驱逐） |
 | `GET /ltai/v1/workflows` | 热改编排配置 |
 | `POST /ltai/v1/workflows/reload` | 重载所有编排 |

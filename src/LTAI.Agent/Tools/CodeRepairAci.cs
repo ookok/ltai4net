@@ -128,6 +128,54 @@ public sealed class CodeRepairAci
         }
     }
 
+    public async Task<string> SearchSymbolAsync(
+        [System.ComponentModel.Description("Symbol or query to search for")]
+        string query,
+        [System.ComponentModel.Description("Optional root path to search (defaults to current directory)")]
+        string? rootPath = null)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(query))
+                return "Error: search query is empty";
+
+            var root = string.IsNullOrWhiteSpace(rootPath) ? Environment.CurrentDirectory : rootPath!;
+            if (!System.IO.Directory.Exists(root))
+                return $"Error: path not found '{root}'";
+
+            var extensions = new[] { ".cs", ".fs", ".ts", ".tsx", ".js", ".py", ".go", ".java", ".cpp", ".c", ".h" };
+            var sb = new System.Text.StringBuilder();
+            var matches = 0;
+            foreach (var file in System.IO.Directory.EnumerateFiles(root, "*", System.IO.SearchOption.AllDirectories))
+            {
+                if (matches >= 50) break;
+                var ext = System.IO.Path.GetExtension(file).ToLowerInvariant();
+                if (System.Array.IndexOf(extensions, ext) < 0) continue;
+                if (file.Contains($"{System.IO.Path.DirectorySeparatorChar}.git{System.IO.Path.DirectorySeparatorChar}")) continue;
+
+                string[] lines;
+                try { lines = await System.IO.File.ReadAllLinesAsync(file); }
+                catch { continue; }
+
+                for (var i = 0; i < lines.Length; i++)
+                {
+                    if (!lines[i].Contains(query, System.StringComparison.Ordinal)) continue;
+                    sb.AppendLine($"{file}:{i + 1}: {lines[i].Trim()}");
+                    matches++;
+                    if (matches >= 50) break;
+                }
+            }
+
+            if (matches == 0) return $"No matches found for '{query}' in {root}";
+            var output = sb.ToString();
+            return output.Length > _maxOutputBytes ? output[.._maxOutputBytes] + "\n... (truncated)" : output;
+        }
+        catch (Exception ex)
+        {
+            return $"Error searching symbol '{query}': {ex.Message}";
+        }
+    }
+
     [System.ComponentModel.Description("Submit the current fix as complete. Records the repair trajectory.")]
     public string Submit(
         [System.ComponentModel.Description("Summary of changes made")]

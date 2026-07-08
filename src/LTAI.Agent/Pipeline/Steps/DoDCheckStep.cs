@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 using LTAI.Agent.Tools.Review;
 using Microsoft.Extensions.AI;
@@ -87,7 +88,9 @@ public sealed class DoDCheckStep : IPipelineStep
                 result.Contains("FIXME", StringComparison.Ordinal))
                 return false;
         }
-        foreach (var msg in context.Messages)
+        List<ChatMessage> messages;
+        lock (context.MessagesLock) messages = context.Messages.ToList();
+        foreach (var msg in messages)
         {
             if (!string.IsNullOrEmpty(msg.Text) &&
                 (msg.Text.Contains("TODO") || msg.Text.Contains("FIXME")))
@@ -109,7 +112,9 @@ public sealed class DoDCheckStep : IPipelineStep
 
     private static bool CheckNoPlaceholders(MessageContext context)
     {
-        foreach (var msg in context.Messages)
+        List<ChatMessage> messages;
+        lock (context.MessagesLock) messages = context.Messages.ToList();
+        foreach (var msg in messages)
         {
             if (!string.IsNullOrEmpty(msg.Text))
             {
